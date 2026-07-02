@@ -122,6 +122,36 @@ app.use((req, res, next) => {
     next();
 });
 
+// Per-endpoint attempt limiter for abuse-sensitive routes (credential guessing,
+// order-tracking enumeration, review spam). The global limiter above still
+// allows ~120 req/min in production — plenty for password guessing — so these
+// routes get their own much tighter buckets. Localhost is exempt, same as the
+// global limiter, so development stays friction-free.
+function makeAttemptLimiter(maxAttempts, windowMs, message) {
+    const buckets = {};
+    setInterval(() => {
+        const now = Date.now();
+        for (const k in buckets) if (now - buckets[k].first > windowMs) delete buckets[k];
+    }, 5 * 60 * 1000).unref();
+    return (req, res, next) => {
+        const ip = req.ip || req.connection.remoteAddress || '';
+        if (ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1') return next();
+        const now = Date.now();
+        const b = buckets[ip];
+        if (!b || now - b.first > windowMs) {
+            buckets[ip] = { count: 1, first: now };
+            return next();
+        }
+        b.count++;
+        if (b.count > maxAttempts) return res.status(429).json({ error: message });
+        next();
+    };
+}
+const loginLimiter    = makeAttemptLimiter(10, 15 * 60 * 1000, 'Too many login attempts. Try again in 15 minutes.');
+const registerLimiter = makeAttemptLimiter(5, 60 * 60 * 1000, 'Too many registration attempts. Try again later.');
+const trackLimiter    = makeAttemptLimiter(30, 15 * 60 * 1000, 'Too many tracking lookups. Try again shortly.');
+const reviewLimiter   = makeAttemptLimiter(10, 60 * 60 * 1000, 'Too many reviews submitted. Try again later.');
+
 // JWT Middleware
 const authenticateToken = (req, res, next) => {
     const authHeader = req.headers['authorization'];
@@ -146,7 +176,7 @@ const requireManager = (req, res, next) => {
 };
 
 // ---------------- AUTH ROUTES ---------------- //
-app.post('/api/login', (req, res) => {
+app.post('/api/login', loginLimiter, (req, res) => {
     const { username, password } = req.body;
     // Accept username OR email — access requests register with email only.
     const ident = String(username || '').trim();
@@ -179,13 +209,13 @@ app.post('/api/login', (req, res) => {
 // until the owner approves it from Manage Staff. Role is fixed to 'staff' here
 // on purpose — requesters never choose their own role; the owner assigns it
 // at approval time.
-app.post('/api/admin/register', async (req, res) => {
+app.post('/api/admin/register', registerLimiter, async (req, res) => {
     const { full_name, email, phone, password } = req.body || {};
     const name = String(full_name || '').trim();
     const mail = String(email || '').trim().toLowerCase();
-    if (name.length < 2) return res.status(400).json({ error: 'Please enter your full name' });
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(mail)) return res.status(400).json({ error: 'Please enter a valid email address' });
-    if (!password || String(password).length < 6) return res.status(400).json({ error: 'Password must be at least 6 characters' });
+    if (name.length < 2 || name.length > 100) return res.status(400).json({ error: 'Please enter your full name' });
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(mail) || mail.length > 254) return res.status(400).json({ error: 'Please enter a valid email address' });
+    if (!password || String(password).length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters' });
 
     try {
         const hash = await bcrypt.hash(String(password), 10);
@@ -309,8 +339,8 @@ app.put('/api/me/password', authenticateToken, async (req, res) => {
     if (!currentPassword || !newPassword) {
         return res.status(400).json({ error: 'currentPassword and newPassword are required' });
     }
-    if (newPassword.length < 6) {
-        return res.status(400).json({ error: 'New password must be at least 6 characters' });
+    if (newPassword.length < 8) {
+        return res.status(400).json({ error: 'New password must be at least 8 characters' });
     }
     db.get(`SELECT * FROM users WHERE id = ?`, [req.user.id], async (err, user) => {
         if (err || !user) return res.status(500).json({ error: 'User not found' });
@@ -624,7 +654,10 @@ app.post('/api/users', authenticateToken, requireManager, async (req, res) => {
     if (!username || !password || !role) {
         return res.status(400).json({ error: 'Missing username, password, or role' });
     }
-    
+    if (String(password).length < 8) {
+        return res.status(400).json({ error: 'Password must be at least 8 characters' });
+    }
+
     try {
         const hash = await bcrypt.hash(password, 10);
         db.run(
@@ -675,10 +708,26 @@ function getPriceModifier(sizeLabel) {
 // Create new order (Storefront)
 app.post('/api/orders', (req, res) => {
     const { customer_name, customer_phone, order_type, items, payment_method, delivery_area, notes } = req.body;
-    
-    if (!items || items.length === 0) {
+
+    if (!Array.isArray(items) || items.length === 0) {
         return res.status(400).json({ error: 'Order must contain items' });
     }
+    if (items.length > 50) {
+        return res.status(400).json({ error: 'Too many items in one order (max 50)' });
+    }
+    // Reject bad quantities outright (negative totals) and absurd ones (abuse).
+    for (const item of items) {
+        if (!Number.isInteger(Number(item.id)) || Number(item.id) < 1) {
+            return res.status(400).json({ error: 'Invalid product id in order' });
+        }
+        if (item.quantity != null && (!Number.isInteger(Number(item.quantity)) || Number(item.quantity) < 1 || Number(item.quantity) > 100)) {
+            return res.status(400).json({ error: 'Quantity must be a whole number between 1 and 100' });
+        }
+    }
+    if (customer_name && String(customer_name).length > 100) return res.status(400).json({ error: 'Name is too long' });
+    if (customer_phone && String(customer_phone).length > 30) return res.status(400).json({ error: 'Phone number is too long' });
+    if (delivery_area && String(delivery_area).length > 200) return res.status(400).json({ error: 'Delivery area is too long' });
+    if (notes && String(notes).length > 1000) return res.status(400).json({ error: 'Notes are too long (max 1000 characters)' });
 
     const isWholesale = (order_type === 'wholesale');
     
@@ -722,7 +771,7 @@ app.post('/api/orders', (req, res) => {
                         firstMod = getPriceModifier(item.size) * qtyMultiplier;
                     }
                     const finalPrice = basePrice + firstMod;
-                    const finalQty = item.quantity || 1; // Number of "packages"
+                    const finalQty = Number(item.quantity) || 1; // Number of "packages"
 
                     total_amount += finalPrice * finalQty;
                     
@@ -923,9 +972,14 @@ app.get('/api/orders/:id/item-preview', authenticateToken, (req, res) => {
 });
 
 // Update order status (Admin)
+const ORDER_STATUSES = ['pending', 'pending_deposit', 'processing', 'paid', 'shipped', 'dispatched', 'delivered', 'completed', 'cancelled'];
 app.put('/api/orders/:id', authenticateToken, (req, res) => {
     const { status } = req.body;
     const orderId = req.params.id;
+    const normStatus = String(status || '').toLowerCase();
+    if (!ORDER_STATUSES.includes(normStatus)) {
+        return res.status(400).json({ error: 'Invalid status. Allowed: ' + ORDER_STATUSES.join(', ') });
+    }
 
     db.get(`SELECT status FROM orders WHERE id = ?`, [orderId], (err, order) => {
         if (err) return res.status(500).json({ error: err.message });
@@ -933,12 +987,12 @@ app.put('/api/orders/:id', authenticateToken, (req, res) => {
 
         db.run(
             `UPDATE orders SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
-            [status, orderId],
+            [normStatus, orderId],
             function (err) {
                 if (err) return res.status(500).json({ error: err.message });
-                
+
                 // If transitioning to paid, deduct stock
-                if (status === 'paid' && order.status !== 'paid') {
+                if (normStatus === 'paid' && order.status !== 'paid') {
                     db.all(`SELECT * FROM order_items WHERE order_id = ?`, [orderId], (err, items) => {
                         if (!err && items) {
                             items.forEach(item => {
@@ -1309,7 +1363,19 @@ app.get('/api/analytics/sales/export', authenticateToken, async (req, res) => {
 // ===========================================================================
 //   CUSTOMER ACCOUNTS (storefront)
 //   Separate auth from staff: JWT carries { cid, email, kind: 'customer' }.
+//
+//   The storefront currently has no sign-in UI (account.html was removed), so
+//   the public entry points — register, login, password reset — are gated off
+//   by default to close an unused write surface. Set CUSTOMER_ACCOUNTS_ENABLED=true
+//   in server/.env to reopen them when the account UI returns. Token-protected
+//   routes (me/addresses/wishlist) stay mounted: without login nobody can mint
+//   a customer token, so they are unreachable until the flag is on.
 // ===========================================================================
+const CUSTOMER_ACCOUNTS_ENABLED = String(process.env.CUSTOMER_ACCOUNTS_ENABLED || '').toLowerCase() === 'true';
+const requireCustomerAccountsEnabled = (req, res, next) => {
+    if (!CUSTOMER_ACCOUNTS_ENABLED) return res.status(404).json({ error: 'Customer accounts are not available' });
+    next();
+};
 const authenticateCustomer = (req, res, next) => {
     const authHeader = req.headers['authorization'];
     const token = authHeader && authHeader.split(' ')[1];
@@ -1321,11 +1387,11 @@ const authenticateCustomer = (req, res, next) => {
     });
 };
 
-app.post('/api/customer/register', async (req, res) => {
+app.post('/api/customer/register', requireCustomerAccountsEnabled, registerLimiter, async (req, res) => {
     try {
         const { name, email, phone, password } = req.body || {};
         if (!name || !email || !password) return res.status(400).json({ error: 'Name, email and password required' });
-        if (password.length < 6) return res.status(400).json({ error: 'Password must be at least 6 characters' });
+        if (password.length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters' });
         const password_hash = await bcrypt.hash(password, 10);
         db.run(
             `INSERT INTO customer_accounts (email, phone, name, password_hash) VALUES (?, ?, ?, ?)`,
@@ -1343,7 +1409,7 @@ app.post('/api/customer/register', async (req, res) => {
     } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-app.post('/api/customer/login', (req, res) => {
+app.post('/api/customer/login', requireCustomerAccountsEnabled, loginLimiter, (req, res) => {
     const { email, password } = req.body || {};
     if (!email || !password) return res.status(400).json({ error: 'Email and password required' });
     db.get(`SELECT * FROM customer_accounts WHERE email = ?`, [email.trim().toLowerCase()], async (err, row) => {
@@ -1358,7 +1424,7 @@ app.post('/api/customer/login', (req, res) => {
 });
 
 // Password Recovery - Request Reset (Forgot Password)
-app.post('/api/customer/forgot-password', (req, res) => {
+app.post('/api/customer/forgot-password', requireCustomerAccountsEnabled, registerLimiter, (req, res) => {
     const { email } = req.body || {};
     if (!email) return res.status(400).json({ error: 'Email address is required' });
     
@@ -1390,13 +1456,13 @@ app.post('/api/customer/forgot-password', (req, res) => {
 });
 
 // Password Recovery - Reset Password (Reset Password Form Submission)
-app.post('/api/customer/reset-password', (req, res) => {
+app.post('/api/customer/reset-password', requireCustomerAccountsEnabled, registerLimiter, (req, res) => {
     const { email, token, password } = req.body || {};
     if (!email || !token || !password) {
         return res.status(400).json({ error: 'Email, recovery token, and new password are required' });
     }
-    if (password.length < 6) {
-        return res.status(400).json({ error: 'Password must be at least 6 characters' });
+    if (password.length < 8) {
+        return res.status(400).json({ error: 'Password must be at least 8 characters' });
     }
 
     // Verify JWT signature and expiration
@@ -1512,7 +1578,7 @@ app.delete('/api/customer/addresses/:id', authenticateCustomer, (req, res) => {
 // ===========================================================================
 //   ORDER TRACKING (public — by order number + last 4 digits of phone)
 // ===========================================================================
-app.post('/api/orders/track', (req, res) => {
+app.post('/api/orders/track', trackLimiter, (req, res) => {
     const { order_number, phone } = req.body || {};
     if (!order_number || !phone) return res.status(400).json({ error: 'order_number and phone are required' });
     const last4 = String(phone).replace(/\D/g, '').slice(-4);
@@ -1579,12 +1645,15 @@ app.get('/api/products/reviews-summary', (req, res) => {
     );
 });
 
-app.post('/api/products/:id/reviews', (req, res) => {
+app.post('/api/products/:id/reviews', reviewLimiter, (req, res) => {
     const { rating, title, body, author_name } = req.body || {};
     const productId = req.params.id;
     const r = Number(rating);
     if (!r || r < 1 || r > 5) return res.status(400).json({ error: 'rating must be 1-5' });
     if (!body || String(body).trim().length < 4) return res.status(400).json({ error: 'Review body is too short' });
+    if (String(body).length > 2000) return res.status(400).json({ error: 'Review is too long (max 2000 characters)' });
+    if (title && String(title).length > 120) return res.status(400).json({ error: 'Title is too long (max 120 characters)' });
+    if (author_name && String(author_name).length > 80) return res.status(400).json({ error: 'Name is too long (max 80 characters)' });
 
     // Optional customer auth — if a customer token is present, attribute it.
     let customer_id = null;
@@ -1671,7 +1740,7 @@ app.put('/api/users/:id', authenticateToken, requireManager, async (req, res) =>
     if (username) { updates.push('username = ?'); values.push(username); }
     if (role && ['manager', 'staff'].includes(role)) { updates.push('role = ?'); values.push(role); }
     if (password) {
-        if (String(password).length < 6) return res.status(400).json({ error: 'Password must be at least 6 characters' });
+        if (String(password).length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters' });
         const hash = await bcrypt.hash(password, 10);
         updates.push('password_hash = ?'); values.push(hash);
     }

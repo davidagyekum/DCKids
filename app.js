@@ -165,7 +165,11 @@ function getCardPrice(productId) {
 
 // ── Render product card HTML ──
 function renderCard(p, index) {
-  const escName = (p.name || '').replace(/'/g, "\\'");
+  // escName goes inside an onclick JS string literal, so it needs BOTH the JS
+  // single-quote escape and HTML escaping; nameHtml/imgHtml cover plain markup.
+  const escName = escapeStr((p.name || '').replace(/'/g, "\\'"));
+  const nameHtml = escapeStr(p.name || '');
+  const imgHtml = escapeStr(p.img || '');
   let badgeHTML = '';
   let isSoldOut = false;
   if (p.stock === 0) {
@@ -298,17 +302,17 @@ function renderCard(p, index) {
   let moqHTML = isWholesale ? `<div class="product-card__moq">MOQ: ${moq}</div>` : '';
 
   return `
-    <article class="${cardClass}" data-category="${p.cat}" data-product-id="${p.id}" style="animation-delay: ${index * 0.04}s">
+    <article class="${cardClass}" data-category="${escapeStr(p.cat || '')}" data-product-id="${p.id}" style="animation-delay: ${index * 0.04}s">
       <div class="product-card__img-wrap">
-        <img class="product-card__img" src="${p.img}" alt="${p.name}" loading="lazy" onerror="this.onerror=null;this.src='images/placeholder.svg';">
+        <img class="product-card__img" src="${imgHtml}" alt="${nameHtml}" loading="lazy" onerror="this.onerror=null;this.src='images/placeholder.svg';">
         ${badgeHTML}
         <button type="button" class="wishlist-heart" data-wishlist-id="${p.id}" aria-label="Add to wishlist" onclick="toggleWishlist(event, ${p.id})">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
         </button>
       </div>
       <div class="product-card__body">
-        <button type="button" class="product-card__name" onclick="openReviewsModal(${p.id}, '${escName}')" aria-label="View details for ${p.name}">${p.name}</button>
-        <button type="button" class="product-card__rating" data-rating-id="${p.id}" onclick="openReviewsModal(${p.id}, '${escName}')" aria-label="View or write a review for ${p.name}" style="display:none;">
+        <button type="button" class="product-card__name" onclick="openReviewsModal(${p.id}, '${escName}')" aria-label="View details for ${nameHtml}">${nameHtml}</button>
+        <button type="button" class="product-card__rating" data-rating-id="${p.id}" onclick="openReviewsModal(${p.id}, '${escName}')" aria-label="View or write a review for ${nameHtml}" style="display:none;">
           <span class="rating-stars" data-stars-for="${p.id}"></span>
           <span class="rating-count" data-count-for="${p.id}"></span>
         </button>
@@ -687,10 +691,10 @@ function renderCartDrawer() {
     subtotal += itemTotal;
     html += `
       <div class="cart-item">
-        <img src="${item.img}" alt="${item.name}" class="cart-item__img">
+        <img src="${escapeStr(item.img || '')}" alt="${escapeStr(item.name || '')}" class="cart-item__img">
         <div class="cart-item__details">
-          <div class="cart-item__title">${item.name}</div>
-          <div class="cart-item__size">${item.size}</div>
+          <div class="cart-item__title">${escapeStr(item.name || '')}</div>
+          <div class="cart-item__size">${escapeStr(item.size || '')}</div>
           <div class="cart-item__price">GH₵ ${gh(item.price)}</div>
         </div>
         <div class="cart-item__controls">
@@ -1238,9 +1242,9 @@ function renderWishlist() {
   }
   body.innerHTML = items.map(p => `
     <div class="cart-item">
-      <img src="${p.img}" alt="${p.name}" class="cart-item__img">
+      <img src="${escapeStr(p.img || '')}" alt="${escapeStr(p.name || '')}" class="cart-item__img">
       <div class="cart-item__details">
-        <div class="cart-item__title">${p.name}</div>
+        <div class="cart-item__title">${escapeStr(p.name || '')}</div>
         <div class="cart-item__price">${p.price ? 'GH₵ ' + gh(p.price) : 'Ask for price'}</div>
         <button type="button" onclick="closeWishlist(); addToCart(${p.id});" style="margin-top:8px;background:#0F4C3A;color:#fff;border:none;border-radius:8px;padding:7px 14px;font-size:13px;font-weight:600;cursor:pointer;display:inline-flex;align-items:center;gap:6px;">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><circle cx="9" cy="21" r="1"></circle><circle cx="20" cy="21" r="1"></circle><path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6"></path></svg>
