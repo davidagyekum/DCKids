@@ -183,9 +183,38 @@ const db = new sqlite3.Database(dbPath, (err) => {
                 }
             });
 
-            // Seed products if empty
+            // Seed products if empty. Prefer the live catalogue snapshot
+            // (../products.json — the same file the storefront uses as its
+            // offline fallback) so a fresh clone starts with the REAL shop:
+            // every storefront category populated, managed sizes included.
+            // The built-in array below only kicks in if the snapshot is
+            // missing or unreadable.
             db.get(`SELECT COUNT(*) as count FROM products`, (err, row) => {
                 if (row.count === 0) {
+                    let snapshot = null;
+                    try {
+                        const fs = require('fs');
+                        const raw = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'products.json'), 'utf8'));
+                        const arr = Array.isArray(raw) ? raw : raw.products;
+                        if (Array.isArray(arr) && arr.length) snapshot = arr;
+                    } catch (e) { /* fall through to built-in seed */ }
+
+                    if (snapshot) {
+                        console.log(`Seeding catalogue from products.json (${snapshot.length} products)...`);
+                        const snapStmt = db.prepare(`INSERT INTO products
+                            (id, name, sku, size, price, img, cat, stock, badge, description, fulfillment_type, sizes)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+                        snapshot.forEach(p => {
+                            const sizes = (p.sizes && typeof p.sizes === 'object') ? JSON.stringify(p.sizes)
+                                : (typeof p.sizes === 'string' && p.sizes.trim() ? p.sizes : null);
+                            snapStmt.run(p.id, p.name, p.sku || null, p.size || '', p.price, p.img || '', p.cat || '',
+                                Number.isFinite(Number(p.stock)) ? Number(p.stock) : 10, p.badge || '',
+                                p.description || null, p.fulfillment_type || 'in_stock', sizes);
+                        });
+                        snapStmt.finalize(() => console.log("Database seeded from catalogue snapshot."));
+                        return;
+                    }
+
                     console.log("Seeding initial products...");
                     const productsData = [
                         { id:1,  name:"Boys 3-Piece Sailor Set",         size:"6M – 24M",   price:85,   img:"images/product_56.jpg", cat:"clothing",    stock:10, badge:"new" },

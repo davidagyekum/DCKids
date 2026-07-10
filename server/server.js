@@ -1008,16 +1008,21 @@ app.post('/api/orders', (req, res) => {
         if (!Number.isInteger(Number(item.id)) || Number(item.id) < 1) {
             return res.status(400).json({ error: 'Invalid product id in order' });
         }
-        if (item.quantity != null && (!Number.isInteger(Number(item.quantity)) || Number(item.quantity) < 1 || Number(item.quantity) > 100)) {
-            return res.status(400).json({ error: 'Quantity must be a whole number between 1 and 100' });
+    }
+    const isWholesale = (order_type === 'wholesale');
+    // Quantities are PIECES for both modes (wholesale just enforces an MOQ
+    // floor below, once settings are loaded). Wholesale gets a higher cap
+    // since 10× MOQ is a normal bulk purchase.
+    const qtyCap = isWholesale ? 1000 : 100;
+    for (const item of items) {
+        if (item.quantity != null && (!Number.isInteger(Number(item.quantity)) || Number(item.quantity) < 1 || Number(item.quantity) > qtyCap)) {
+            return res.status(400).json({ error: `Quantity must be a whole number between 1 and ${qtyCap}` });
         }
     }
     if (customer_name && String(customer_name).length > 100) return res.status(400).json({ error: 'Name is too long' });
     if (customer_phone && String(customer_phone).length > 30) return res.status(400).json({ error: 'Phone number is too long' });
     if (delivery_area && String(delivery_area).length > 200) return res.status(400).json({ error: 'Delivery area is too long' });
     if (notes && String(notes).length > 1000) return res.status(400).json({ error: 'Notes are too long (max 1000 characters)' });
-
-    const isWholesale = (order_type === 'wholesale');
     
     // 1. Fetch store settings for wholesale math
     db.get(`SELECT * FROM store_settings WHERE id = 1`, (err, settings) => {
@@ -1025,7 +1030,6 @@ app.post('/api/orders', (req, res) => {
         
         const moq = settings ? settings.wholesale_moq : 10;
         const discount = settings ? settings.wholesale_discount : 0;
-        const qtyMultiplier = isWholesale ? moq : 1;
 
         let total_amount = 0;
         const processedItems = [];
@@ -1045,31 +1049,40 @@ app.post('/api/orders', (req, res) => {
                         ? managedSizes.find(s => s.label === item.size)
                         : null;
 
-                    let basePrice, firstMod;
+                    // PER-PIECE pricing for both modes. The storefront sends
+                    // quantity in pieces (its bulk dropdown lists "10 pcs",
+                    // "20 pcs", ...), so wholesale applies the discount to the
+                    // unit price and enforces the MOQ floor — it does NOT
+                    // multiply by MOQ again. (The old package-based math
+                    // charged a 10-piece wholesale order as 10 packages =
+                    // 100 pieces: a 10× overcharge, and stock deducted 10×.)
+                    let unitPrice;
                     if (sizeMatch) {
-                        let unit = (sizeMatch.price != null) ? sizeMatch.price : (product.price || 0);
-                        if (isWholesale) unit = (unit * (1 - (discount / 100))) * moq;
-                        basePrice = unit;
-                        firstMod = 0; // absolute per-size price already includes any uplift
+                        unitPrice = (sizeMatch.price != null) ? sizeMatch.price : (product.price || 0);
+                        if (isWholesale) unitPrice = unitPrice * (1 - (discount / 100));
                     } else {
-                        basePrice = product.price || 0;
-                        if (isWholesale) {
-                            basePrice = (basePrice * (1 - (discount / 100))) * moq;
-                        }
-                        firstMod = getPriceModifier(item.size) * qtyMultiplier;
+                        unitPrice = product.price || 0;
+                        if (isWholesale) unitPrice = unitPrice * (1 - (discount / 100));
+                        unitPrice += getPriceModifier(item.size);
                     }
-                    const finalPrice = basePrice + firstMod;
-                    const finalQty = Number(item.quantity) || 1; // Number of "packages"
+                    unitPrice = Math.round(unitPrice * 100) / 100;
 
-                    total_amount += finalPrice * finalQty;
-                    
+                    const finalQty = Number(item.quantity) || 1; // pieces
+                    if (isWholesale && finalQty < moq) {
+                        const e = new Error(`Wholesale orders need at least ${moq} pieces per item`);
+                        e.status = 400;
+                        return reject(e);
+                    }
+
+                    total_amount += unitPrice * finalQty;
+
                     processedItems.push({
                         product_id: product.id,
                         product_name: `${product.name} (${item.size || 'Standard'})`,
-                        quantity: finalQty * qtyMultiplier,
-                        price_at_time: finalPrice
+                        quantity: finalQty,
+                        price_at_time: unitPrice
                     });
-                    
+
                     resolve();
                 });
             });
@@ -1077,6 +1090,7 @@ app.post('/api/orders', (req, res) => {
 
         Promise.all(productPromises)
             .then(() => {
+                total_amount = Math.round(total_amount * 100) / 100;
                 const initialStatus = order_type === 'preorder' ? 'pending_deposit' : 'pending';
                 // A temporary unique placeholder satisfies the UNIQUE NOT NULL
                 // column until we know the row id; the real order number is then
@@ -1127,7 +1141,7 @@ app.post('/api/orders', (req, res) => {
                 );
             })
             .catch(err => {
-                res.status(500).json({ error: err.message });
+                res.status(err.status || 500).json({ error: err.message });
             });
     });
 });

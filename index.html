@@ -213,10 +213,11 @@
       } 
     }
     
-    /* Global overrides to expand dynamic content to fill screen width */
+    /* Contain the grid a bit narrower than full width so there is clear space on
+       the left and right, and the 5 columns render as slightly smaller cards. */
     body .product-grid, body .section-header {
-      max-width: 1600px !important;
-      width: 95% !important;
+      max-width: 1400px !important;
+      width: 90% !important;
       margin-left: auto !important;
       margin-right: auto !important;
     }
@@ -281,7 +282,7 @@
       }
     }
   </style>
-  <link rel="stylesheet" href="styles.css?v=21">
+  <link rel="stylesheet" href="styles.css?v=23">
 
   <!-- Structured data: Organization + WebSite (SEO + Google rich results) -->
   <script type="application/ld+json">
@@ -680,9 +681,6 @@
     <div class="bg-[#EEF2EF] rounded-3xl overflow-hidden flex flex-col md:flex-row items-center shadow-sm">
       <!-- Left side: Text and CTA -->
       <div class="w-full md:w-[55%] p-8 md:p-12 md:pr-16 flex flex-col justify-center items-start text-left gap-4 relative z-10">
-        <span class="w-12 h-12 rounded-2xl bg-brand-green/10 flex items-center justify-center text-brand-darkgreen text-xl">
-          <i class="fas fa-users"></i>
-        </span>
         <h2 class="font-serif text-2xl md:text-3.5xl text-brand-darkgreen font-bold leading-tight">Wholesale for Resellers</h2>
         <p class="text-sm md:text-base text-gray-600 max-w-md leading-relaxed">
           Exclusive prices, bulk discounts and priority service for your business.
@@ -718,9 +716,6 @@
     <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
       <!-- Card 1 -->
       <div class="bg-white p-6 rounded-2xl border border-gray-100 shadow-sm flex items-start gap-4">
-        <span class="w-12 h-12 rounded-xl bg-brand-green/10 flex items-center justify-center text-brand-darkgreen text-xl flex-shrink-0">
-          <i class="fas fa-store"></i>
-        </span>
         <div>
           <h3 class="font-semibold text-gray-800 text-base mb-1">Physical Store</h3>
           <p class="text-xs text-gray-500 leading-relaxed">Visit us at ECOWAS Plaza Building, Kasoa-Adade. See & feel before you buy.</p>
@@ -729,9 +724,6 @@
       
       <!-- Card 2 -->
       <div class="bg-white p-6 rounded-2xl border border-gray-100 shadow-sm flex items-start gap-4">
-        <span class="w-12 h-12 rounded-xl bg-brand-green/10 flex items-center justify-center text-brand-darkgreen text-xl flex-shrink-0">
-          <i class="fas fa-truck"></i>
-        </span>
         <div>
           <h3 class="font-semibold text-gray-800 text-base mb-1">Nationwide Delivery</h3>
           <p class="text-xs text-gray-500 leading-relaxed">We deliver across Ghana. Your order, at your doorstep.</p>
@@ -740,9 +732,6 @@
       
       <!-- Card 3 -->
       <div class="bg-white p-6 rounded-2xl border border-gray-100 shadow-sm flex items-start gap-4">
-        <span class="w-12 h-12 rounded-xl bg-brand-green/10 flex items-center justify-center text-brand-darkgreen text-xl flex-shrink-0">
-          <i class="fas fa-dollar-sign"></i>
-        </span>
         <div>
           <h3 class="font-semibold text-gray-800 text-base mb-1">Wholesale & Retail</h3>
           <p class="text-xs text-gray-500 leading-relaxed">Best prices in Kasoa! Bulk buyers & retailers welcome.</p>
@@ -921,7 +910,7 @@
   </div>
 
   <script src="gradient.js?v=3"></script>
-  <script src="app.js?v=20"></script>
+  <script src="app.js?v=21"></script>
 
   <!-- ===== CHECKOUT MODAL ===== -->
   <div id="checkoutModal" style="display:none;position:fixed;inset:0;z-index:3000;align-items:center;justify-content:center;background:rgba(0,0,0,0.45);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);">

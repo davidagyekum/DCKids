@@ -185,9 +185,11 @@ function renderCard(p, index) {
 
   // Genuine low-stock urgency only — never faked. Retail only (wholesale sells in bulk),
   // and not for pre-orders (their stock isn't on-hand).
+  // Overlaid on the image (not in the card body) so cards with and without
+  // the chip keep identical body heights and the grid stays aligned.
   let lowStockHTML = '';
   if (!isSoldOut && p.fulfillment_type !== 'preorder' && typeof p.stock === 'number' && p.stock > 0 && p.stock <= 5) {
-    lowStockHTML = '<div class="product-card__lowstock"><span class="product-card__lowstock-dot"></span>Only ' + p.stock + ' left</div>';
+    lowStockHTML = '<div class="product-card__lowstock" style="position:absolute;left:8px;bottom:8px;z-index:2;display:inline-flex;align-items:center;gap:5px;background:rgba(255,255,255,0.95);color:#B91C1C;font-size:11px;font-weight:700;padding:3px 9px;border-radius:999px;box-shadow:0 1px 4px rgba(0,0,0,0.12);"><span style="width:6px;height:6px;border-radius:50%;background:#EF4444;display:inline-block;"></span>Only ' + p.stock + ' left</div>';
   }
 
   const isWholesale = (storeMode === 'wholesale');
@@ -306,6 +308,7 @@ function renderCard(p, index) {
       <div class="product-card__img-wrap">
         <img class="product-card__img" src="${imgHtml}" alt="${nameHtml}" loading="lazy" onerror="this.onerror=null;this.src='images/placeholder.svg';">
         ${badgeHTML}
+        ${lowStockHTML}
         <button type="button" class="wishlist-heart" data-wishlist-id="${p.id}" aria-label="Add to wishlist" onclick="toggleWishlist(event, ${p.id})">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
         </button>
@@ -316,7 +319,6 @@ function renderCard(p, index) {
           <span class="rating-stars" data-stars-for="${p.id}"></span>
           <span class="rating-count" data-count-for="${p.id}"></span>
         </button>
-        ${lowStockHTML}
         ${moqHTML}
         ${sizeHTML}
         ${bulkQtyHTML}
@@ -659,14 +661,18 @@ function addToCart(id) {
   const qtyToAdd      = (isWholesale && bulkQtyEl) ? parseInt(bulkQtyEl.value) : 1;
   const existing      = cart.find(item => item.id === id && item.size === size);
   if (existing) { existing.qty += qtyToAdd; }
-  else { cart.push({ id: product.id, name: product.name, size, price: adjustedPrice, qty: qtyToAdd, img: product.img }); }
+  else { cart.push({ id: product.id, name: product.name, size, price: adjustedPrice, qty: qtyToAdd, img: product.img, ws: isWholesale ? 1 : 0 }); }
   saveCart(); renderCartDrawer(); openCart();
 }
 
 function updateCartQty(index, change) {
   if (!cart[index]) return;
-  cart[index].qty += change;
-  if (cart[index].qty <= 0) cart.splice(index, 1);
+  // Wholesale lines step by the MOQ (they're bulk pieces, e.g. 10 at a time)
+  // and can't drop below it — the server rejects sub-MOQ wholesale items.
+  const item = cart[index];
+  const moq = (item.ws && siteConfig.wholesale_moq) ? siteConfig.wholesale_moq : 1;
+  item.qty += change * moq;
+  if (item.qty < moq) cart.splice(index, 1);
   saveCart(); renderCartDrawer();
 }
 
@@ -694,8 +700,8 @@ function renderCartDrawer() {
         <img src="${escapeStr(item.img || '')}" alt="${escapeStr(item.name || '')}" class="cart-item__img">
         <div class="cart-item__details">
           <div class="cart-item__title">${escapeStr(item.name || '')}</div>
-          <div class="cart-item__size">${escapeStr(item.size || '')}</div>
-          <div class="cart-item__price">GH₵ ${gh(item.price)}</div>
+          <div class="cart-item__size">${escapeStr(item.size || '')}${item.ws ? ' · Wholesale (' + item.qty + ' pcs)' : ''}</div>
+          <div class="cart-item__price">GH₵ ${gh(item.price)}${item.ws ? ' <span style="font-size:11px;color:#888;">/pc</span>' : ''}</div>
         </div>
         <div class="cart-item__controls">
           <button class="cart-item__btn" onclick="updateCartQty(${index}, -1)">-</button>
@@ -969,6 +975,16 @@ async function initApp() {
         } else { products = []; }
       } else { products = []; }
     } catch (e2) { products = []; }
+  }
+
+  // Drop cart lines whose product no longer exists in the catalogue (e.g. a
+  // stale cart saved before a catalogue swap). Left in place they render with
+  // old names/prices and the server rejects the whole order at checkout.
+  if (Array.isArray(products) && products.length && cart.length) {
+    const liveIds = new Set(products.map(p => Number(p.id)));
+    const beforeCount = cart.length;
+    cart = cart.filter(item => liveIds.has(Number(item.id)));
+    if (cart.length !== beforeCount) { saveCart(); renderCartDrawer(); }
   }
 
   // Setup Search
@@ -1564,6 +1580,14 @@ window.addEventListener('load', () => { setTimeout(syncWishlistState, 200); });
     // Any category that actually has products always shows — even for shoppers
     // whose browser doesn't have the managed list (it's product data, server-side).
     try { (Array.isArray(products) ? products : []).forEach(function (p) { if (p.cat) push(p.cat); }); } catch (e) {}
+    // Hide categories with nothing in them — an empty grid reads as broken to
+    // shoppers. Only filter once the catalogue has loaded, so a failed fetch
+    // can't blank out the nav.
+    if (Array.isArray(products) && products.length) {
+      var have = {};
+      products.forEach(function (p) { if (p.cat) have[p.cat] = 1; });
+      out = out.filter(function (c) { return have[c.id]; });
+    }
     return out;
   }
 
