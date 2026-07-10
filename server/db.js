@@ -618,6 +618,17 @@ const db = new sqlite3.Database(dbPath, (err) => {
         db.run(`CREATE INDEX IF NOT EXISTS idx_products_cat        ON products (cat)`);
         db.run(`CREATE INDEX IF NOT EXISTS idx_payments_order      ON payments (order_id)`);
 
+        // Sweep rows that reference products which no longer exist (deleted
+        // before the delete route cleaned its dependents, or replaced in a
+        // catalogue swap). They violate the FK on reads with foreign_keys=ON
+        // and serve no purpose without their product. No-op when clean.
+        [['product_images', 'gallery rows'], ['product_reviews', 'reviews'], ['wishlist_items', 'wishlist rows']].forEach(([table, label]) => {
+            db.run(`DELETE FROM ${table} WHERE product_id NOT IN (SELECT id FROM products)`, function (er) {
+                if (er) console.error(`Orphan sweep (${table}) failed:`, er.message);
+                else if (this && this.changes) console.log(`Orphan sweep: removed ${this.changes} ${label} for deleted products.`);
+            });
+        });
+
         // Schema is fully queued above. This trailing statement runs only after
         // every CREATE TABLE/INDEX has executed (single-connection serial queue),
         // so it's a reliable "schema ready" signal. The server waits on this via

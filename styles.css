@@ -570,8 +570,8 @@ ul { list-style: none; }
 .product-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 14px;
-  padding: 0 16px 32px;
+  gap: 12px;
+  padding: 0 12px 24px;
   box-sizing: border-box;
   width: 100%;
   max-width: 100%;
@@ -1532,6 +1532,15 @@ input:focus-visible {
   .product-grid { grid-template-columns: 1fr 1fr; gap: 8px; padding: 0 12px 24px; }
   .product-card__body { padding: 8px; }
   .product-card__name { font-size: 12px; }
+}
+
+/* Mobile: 2-up grid uses the full width for larger, readable product images and
+   comfortably wide "Add to Cart" buttons. Extra bottom clearance keeps the
+   floating bottom nav / Install-app button from covering the last row. */
+@media (max-width: 640px) {
+  body .product-grid { width: 100% !important; }
+  #dynamicSections, #preorderSection { padding-bottom: 84px; }
+  .product-card__rating { flex-wrap: wrap; }
 }
 
 /* Size/bulk-qty dropdown: on a narrow card the open list crowds out the cards

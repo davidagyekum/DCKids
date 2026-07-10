@@ -8249,7 +8249,7 @@ function loadAdmins() {
                 } catch(e) {}
 
                 var actionsHTML = '';
-                var editBtn = '<button class="action-icon edit" title="Edit Account" onclick="openEditStaffModal(' + u.id + ', \'' + escapeHtml(u.username) + '\', \'' + u.role + '\')" style="background:none;border:none;cursor:pointer;color:var(--primary,#fc4c7a);margin-right:6px;"><svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 1 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/></svg></button>';
+                var editBtn = '<button class="action-icon edit" title="Edit Account" onclick="openEditStaffModal(' + u.id + ', \'' + escapeHtml(u.email || u.username) + '\', \'' + u.role + '\', \'' + escapeHtml(u.full_name || '') + '\')" style="background:none;border:none;cursor:pointer;color:var(--primary,#fc4c7a);margin-right:6px;"><svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 1 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/></svg></button>';
                 if (isSelf) {
                     actionsHTML = editBtn + '<span style="font-size:11px;color:#888;font-style:italic;">You</span>';
                 } else {
@@ -8259,7 +8259,8 @@ function loadAdmins() {
 
                 var row = document.createElement('tr');
                 row.innerHTML = '<td class="table-card-header" data-label="ID">' + u.id + '</td>' +
-                    '<td data-label="Username"><strong>' + escapeHtml(u.username) + '</strong></td>' +
+                    '<td data-label="Account"><strong>' + escapeHtml(u.full_name || u.username) + '</strong>' +
+                        (u.email ? '<div style="font-size:12px;color:#888;">' + escapeHtml(u.email) + '</div>' : '') + '</td>' +
                     '<td data-label="Role"><span class="status-pill ' + (u.role === 'manager' ? 'active' : 'draft') + '">' + escapeHtml(u.role === 'manager' ? 'Manager' : 'Staff') + '</span></td>' +
                     '<td data-label="Actions" style="text-align: right;">' + actionsHTML + '</td>';
                 tbody.appendChild(row);
@@ -8392,13 +8393,13 @@ function refreshAccessRequestsBadge() {
 }
 
 function openAddStaffModal() {
-    document.getElementById('add-staff-username').value = '';
-    document.getElementById('add-staff-password').value = '';
+    document.getElementById('add-staff-name').value = '';
+    document.getElementById('add-staff-email').value = '';
     document.getElementById('add-staff-role').value = 'staff';
-    
+
     // Clear validation borders
-    document.getElementById('add-staff-username').style.borderColor = '';
-    document.getElementById('add-staff-password').style.borderColor = '';
+    document.getElementById('add-staff-name').style.borderColor = '';
+    document.getElementById('add-staff-email').style.borderColor = '';
 
     openModal('modal-add-staff');
 }
@@ -8408,20 +8409,20 @@ function closeAddStaffModal() {
 }
 
 function saveStaffUser() {
-    var usernameEl = document.getElementById('add-staff-username');
-    var passwordEl = document.getElementById('add-staff-password');
+    var nameEl = document.getElementById('add-staff-name');
+    var emailEl = document.getElementById('add-staff-email');
     var roleEl = document.getElementById('add-staff-role');
 
-    var username = usernameEl.value.trim();
-    var password = passwordEl.value.trim();
+    var fullName = nameEl.value.trim();
+    var email = emailEl.value.trim().toLowerCase();
     var role = roleEl.value;
 
     var valid = true;
-    if (!username) { usernameEl.style.borderColor = '#dc2626'; valid = false; }
-    else { usernameEl.style.borderColor = ''; }
+    if (fullName.length < 2) { nameEl.style.borderColor = '#dc2626'; valid = false; }
+    else { nameEl.style.borderColor = ''; }
 
-    if (!password) { passwordEl.style.borderColor = '#dc2626'; valid = false; }
-    else { passwordEl.style.borderColor = ''; }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { emailEl.style.borderColor = '#dc2626'; valid = false; }
+    else { emailEl.style.borderColor = ''; }
 
     if (!valid) return;
 
@@ -8434,18 +8435,18 @@ function saveStaffUser() {
             'Content-Type': 'application/json',
             'Authorization': 'Bearer ' + token
         },
-        body: JSON.stringify({ username: username, password: password, role: role })
+        body: JSON.stringify({ full_name: fullName, email: email, role: role })
     })
     .then(function(res) {
-        if (res.status === 409) throw new Error('Username already exists');
-        if (!res.ok) throw new Error('Failed to create staff account');
+        if (res.status === 409) throw new Error('An account with this email already exists');
+        if (!res.ok) return res.json().then(function(j) { throw new Error((j && j.error) || 'Failed to create staff account'); });
         return res.json();
     })
     .then(function(data) {
         closeAddStaffModal();
         loadAdmins();
         if (typeof showToast === 'function') {
-            showToast('Staff account created successfully', 'success');
+            showToast('Staff added — they can sign in with an email code right away', 'success');
         }
     })
     .catch(function(err) {
@@ -8487,14 +8488,14 @@ function deleteStaff(id) {
 // ============================================================
 //   Edit Staff
 // ============================================================
-function openEditStaffModal(id, username, role) {
+function openEditStaffModal(id, email, role, fullName) {
     var modal = document.getElementById('modal-edit-staff');
     if (!modal) return;
     document.getElementById('edit-staff-id').value = id;
-    document.getElementById('edit-staff-username').value = username;
+    document.getElementById('edit-staff-name').value = fullName || '';
+    document.getElementById('edit-staff-email').value = email || '';
     document.getElementById('edit-staff-role').value = role || 'staff';
-    document.getElementById('edit-staff-password').value = '';
-    ['edit-staff-username', 'edit-staff-password'].forEach(function(k) {
+    ['edit-staff-name', 'edit-staff-email'].forEach(function(k) {
         var el = document.getElementById(k); if (el) el.style.borderColor = '';
     });
     if (typeof openModal === 'function') openModal('modal-edit-staff');
@@ -8504,20 +8505,18 @@ function closeEditStaffModal() {
 }
 function saveEditStaffUser() {
     var id = document.getElementById('edit-staff-id').value;
-    var usernameEl = document.getElementById('edit-staff-username');
-    var passwordEl = document.getElementById('edit-staff-password');
+    var nameEl = document.getElementById('edit-staff-name');
+    var emailEl = document.getElementById('edit-staff-email');
     var roleEl = document.getElementById('edit-staff-role');
-    var username = usernameEl.value.trim();
-    var password = passwordEl.value;
+    var fullName = nameEl.value.trim();
+    var email = emailEl.value.trim().toLowerCase();
     var role = roleEl.value;
 
-    if (!username) { usernameEl.style.borderColor = '#dc2626'; return; }
-    usernameEl.style.borderColor = '';
-    if (password && password.length < 6) { passwordEl.style.borderColor = '#dc2626'; showToast('Password must be at least 6 characters', 'warning'); return; }
-    passwordEl.style.borderColor = '';
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { emailEl.style.borderColor = '#dc2626'; showToast('Enter a valid email address', 'warning'); return; }
+    emailEl.style.borderColor = '';
 
-    var body = { username: username, role: role };
-    if (password) body.password = password;
+    var body = { email: email, role: role };
+    if (fullName) body.full_name = fullName;
 
     var token = localStorage.getItem('adminToken');
     if (!token) return;
@@ -8527,7 +8526,7 @@ function saveEditStaffUser() {
         body: JSON.stringify(body)
     })
     .then(function(res) {
-        if (res.status === 409) throw new Error('Username already taken');
+        if (res.status === 409) throw new Error('That email is already in use');
         if (!res.ok) return res.json().then(function(j) { throw new Error((j && j.error) || 'Update failed'); });
         return res.json();
     })

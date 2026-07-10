@@ -5834,12 +5834,13 @@
       <div class="modal-body">
         <form id="add-staff-form" onsubmit="return false;">
           <div class="form-group">
-            <label for="add-staff-username">Username <span style="color:var(--danger);">*</span></label>
-            <input type="text" id="add-staff-username" class="form-input" placeholder="Enter username" required />
+            <label for="add-staff-name">Full name <span style="color:var(--danger);">*</span></label>
+            <input type="text" id="add-staff-name" class="form-input" placeholder="e.g. Ama Mensah" autocomplete="off" required />
           </div>
           <div class="form-group" style="margin-top:16px;">
-            <label for="add-staff-password">Password <span style="color:var(--danger);">*</span></label>
-            <input type="password" id="add-staff-password" class="form-input" placeholder="Enter password" required />
+            <label for="add-staff-email">Email <span style="color:var(--danger);">*</span></label>
+            <input type="email" id="add-staff-email" class="form-input" placeholder="name@example.com" autocomplete="off" required />
+            <div style="font-size:11px;color:#888;margin-top:6px;">No password needed — they'll sign in with a 6-digit code emailed to this address.</div>
           </div>
           <div class="form-group" style="margin-top:16px;">
             <label for="add-staff-role">Role <span style="color:var(--danger);">*</span></label>
@@ -5869,8 +5870,13 @@
       <div class="modal-body">
         <input type="hidden" id="edit-staff-id" />
         <div class="form-group">
-          <label for="edit-staff-username">Username <span style="color:var(--danger);">*</span></label>
-          <input type="text" id="edit-staff-username" class="form-input" />
+          <label for="edit-staff-name">Full name</label>
+          <input type="text" id="edit-staff-name" class="form-input" autocomplete="off" />
+        </div>
+        <div class="form-group" style="margin-top:16px;">
+          <label for="edit-staff-email">Email <span style="color:var(--danger);">*</span></label>
+          <input type="email" id="edit-staff-email" class="form-input" autocomplete="off" />
+          <div style="font-size:11px;color:#888;margin-top:6px;">This is their sign-in address — codes are emailed here.</div>
         </div>
         <div class="form-group" style="margin-top:16px;">
           <label for="edit-staff-role">Role</label>
@@ -5878,10 +5884,6 @@
             <option value="staff">Staff Member</option>
             <option value="manager">Manager / Admin</option>
           </select>
-        </div>
-        <div class="form-group" style="margin-top:16px;">
-          <label for="edit-staff-password">New password <span style="color:#888;font-weight:400;font-size:11px;">(leave blank to keep current)</span></label>
-          <input type="password" id="edit-staff-password" class="form-input" placeholder="At least 6 characters" autocomplete="new-password" />
         </div>
       </div>
       <div class="modal-footer">
@@ -6135,7 +6137,7 @@
 
   <!-- Scripts -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-  <script src="admin.js?v=112"></script>
+  <script src="admin.js?v=113"></script>
   <script>
     // Keep the admin page on fresh code: when an updated service worker takes
     // control, reload once (guarded against loops and first-registration).

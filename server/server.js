@@ -82,6 +82,19 @@ if (IS_PROD && (!process.env.JWT_SECRET || JWT_SECRET === 'dckids-super-secret-k
     process.exit(1);
 }
 
+// Sign-in is passwordless: codes arrive by email. A production deploy without a
+// Resend key can't deliver codes, which locks every admin out (the codes are
+// deliberately NOT logged in production — see request-code). Google sign-in, if
+// configured, is a usable fallback, so degrade to a loud warning in that case.
+if (IS_PROD && !process.env.RESEND_API_KEY) {
+    if ((process.env.GOOGLE_CLIENT_ID || '').trim()) {
+        console.warn('WARNING: RESEND_API_KEY is not set — email sign-in codes cannot be delivered. Only "Continue with Google" will work.');
+    } else {
+        console.error('FATAL: RESEND_API_KEY must be set in production — sign-in codes are emailed and there is no other way in. Refusing to start.');
+        process.exit(1);
+    }
+}
+
 // ---------------- Passwordless auth: email (Resend) + code helpers ----------------
 const https = require('https');
 const crypto = require('crypto');
@@ -388,9 +401,12 @@ app.post('/api/auth/request-code', loginLimiter, (req, res) => {
             db.run(`INSERT INTO auth_codes (user_id, code_hash, expires_at, attempts) VALUES (?, ?, ?, 0)`,
                 [user.id, codeHash, expiresAt], (e2) => {
                     if (e2) return res.status(500).json({ error: e2.message });
-                    // Operator-visible so the flow is testable in Resend test mode
-                    // (where email only delivers to your own Resend address).
-                    console.log(`\n[SIGN-IN CODE] ${mail} -> ${code}  (valid 10 min)\n`);
+                    // Operator-visible in development so the flow is testable
+                    // without email (and in Resend test mode, where email only
+                    // delivers to your own address). NEVER in production:
+                    // logging live sign-in codes would let anyone with log
+                    // access take over any admin account.
+                    if (!IS_PROD) console.log(`\n[SIGN-IN CODE] ${mail} -> ${code}  (valid 10 min)\n`);
                     sendEmail(mail, 'Your DC Kids admin sign-in code', otpEmailHtml(code));
                     res.json({ success: true, message: 'A 6-digit code has been sent to your email.' });
                 });
@@ -619,27 +635,6 @@ app.get('/api/settings', (req, res) => {
 // Token validation endpoint
 app.get('/api/me', authenticateToken, (req, res) => {
     res.json({ id: req.user.id, username: req.user.username, role: req.user.role });
-});
-
-// Change own password
-app.put('/api/me/password', authenticateToken, async (req, res) => {
-    const { currentPassword, newPassword } = req.body;
-    if (!currentPassword || !newPassword) {
-        return res.status(400).json({ error: 'currentPassword and newPassword are required' });
-    }
-    if (newPassword.length < 8) {
-        return res.status(400).json({ error: 'New password must be at least 8 characters' });
-    }
-    db.get(`SELECT * FROM users WHERE id = ?`, [req.user.id], async (err, user) => {
-        if (err || !user) return res.status(500).json({ error: 'User not found' });
-        const match = await bcrypt.compare(currentPassword, user.password_hash);
-        if (!match) return res.status(401).json({ error: 'Current password is incorrect' });
-        const hash = await bcrypt.hash(newPassword, 10);
-        db.run(`UPDATE users SET password_hash = ? WHERE id = ?`, [hash, req.user.id], function(err) {
-            if (err) return res.status(500).json({ error: err.message });
-            res.json({ success: true });
-        });
-    });
 });
 
 // Update store settings (Manager only)
@@ -936,49 +931,61 @@ app.get('/api/users', authenticateToken, requireManager, (req, res) => {
     });
 });
 
-// Create new user (staff/manager)
-app.post('/api/users', authenticateToken, requireManager, async (req, res) => {
-    const { username, password, role } = req.body;
-    if (!username || !password || !role) {
-        return res.status(400).json({ error: 'Missing username, password, or role' });
+// Create new user (staff/manager). Passwordless: the account is identified by
+// email and immediately active — the person signs in with an emailed 6-digit
+// code (or Google), so no password is collected. This is the owner's direct
+// "add my staff" path; the public register endpoint is the request/approve one.
+app.post('/api/users', authenticateToken, requireManager, (req, res) => {
+    const { full_name, email, role } = req.body || {};
+    const mail = String(email || '').trim().toLowerCase();
+    const name = String(full_name || '').trim();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(mail) || mail.length > 254) {
+        return res.status(400).json({ error: 'A valid email address is required — staff sign in with a code sent to it' });
     }
-    if (String(password).length < 8) {
-        return res.status(400).json({ error: 'Password must be at least 8 characters' });
+    if (name.length < 2 || name.length > 100) {
+        return res.status(400).json({ error: 'Please enter the person\'s full name' });
     }
-
-    try {
-        const hash = await bcrypt.hash(password, 10);
-        db.run(
-            `INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)`,
-            [username.trim(), hash, role],
-            function(err) {
-                if (err) {
-                    if (err.message && err.message.indexOf('UNIQUE') >= 0) {
-                        return res.status(409).json({ error: 'Username already exists' });
-                    }
-                    return res.status(500).json({ error: err.message });
+    const finalRole = role === 'manager' ? 'manager' : 'staff';
+    db.run(
+        `INSERT INTO users (username, password_hash, role, email, full_name, status, created_at)
+         VALUES (?, NULL, ?, ?, ?, 'active', datetime('now'))`,
+        [mail, finalRole, mail, name],
+        function (err) {
+            if (err) {
+                if (err.message && err.message.indexOf('UNIQUE') >= 0) {
+                    return res.status(409).json({ error: 'An account with this email already exists' });
                 }
-                res.status(201).json({ id: this.lastID, username: username.trim(), role });
+                return res.status(500).json({ error: err.message });
             }
-        );
-    } catch (e) {
-        res.status(500).json({ error: e.message });
-    }
+            sendEmail(mail, 'You now have DC Kids admin access',
+                `<p>Hi ${escapeHtmlServer(name)}, you've been given ${finalRole} access to the DC Kids dashboard.</p>
+                 <p>Sign in at <a href="${APP_URL}/admin.html">${APP_URL}/admin.html</a> — we'll email you a 6-digit code each time.</p>`);
+            res.status(201).json({ id: this.lastID, email: mail, full_name: name, role: finalRole });
+        }
+    );
 });
 
-// Delete user
+// Delete user. Their sign-in codes reference the user row (FK), so they must
+// go first — every activated account has recovery codes, and deleting the user
+// row alone fails with "FOREIGN KEY constraint failed".
 app.delete('/api/users/:id', authenticateToken, requireManager, (req, res) => {
     const userId = req.params.id;
-    
+
     // Prevent self-deletion
     if (Number(userId) === req.user.id) {
         return res.status(400).json({ error: 'Cannot delete your own logged-in user account' });
     }
-    
-    db.run(`DELETE FROM users WHERE id = ?`, [userId], function(err) {
+
+    db.run(`DELETE FROM auth_codes WHERE user_id = ?`, [userId], (err) => {
         if (err) return res.status(500).json({ error: err.message });
-        if (this.changes === 0) return res.status(404).json({ error: 'User not found' });
-        res.json({ success: true, message: 'User deleted successfully' });
+        db.run(`DELETE FROM recovery_codes WHERE user_id = ?`, [userId], (err2) => {
+            if (err2) return res.status(500).json({ error: err2.message });
+            db.run(`DELETE FROM users WHERE id = ?`, [userId], function (err3) {
+                if (err3) return res.status(500).json({ error: err3.message });
+                if (this.changes === 0) return res.status(404).json({ error: 'User not found' });
+                res.json({ success: true, message: 'User deleted successfully' });
+            });
+        });
     });
 });
 
@@ -2035,22 +2042,27 @@ app.delete('/api/wishlist/:productId', authenticateCustomer, (req, res) => {
 // ===========================================================================
 //   EDIT STAFF (admin)
 // ===========================================================================
-app.put('/api/users/:id', authenticateToken, requireManager, async (req, res) => {
-    const { username, role, password } = req.body || {};
+// Passwordless accounts are edited by name, email (their sign-in identity —
+// username is kept in sync with it), and role. No password fields exist.
+app.put('/api/users/:id', authenticateToken, requireManager, (req, res) => {
+    const { full_name, email, role } = req.body || {};
     const updates = [];
     const values = [];
-    if (username) { updates.push('username = ?'); values.push(username); }
-    if (role && ['manager', 'staff'].includes(role)) { updates.push('role = ?'); values.push(role); }
-    if (password) {
-        if (String(password).length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters' });
-        const hash = await bcrypt.hash(password, 10);
-        updates.push('password_hash = ?'); values.push(hash);
+    if (email) {
+        const mail = String(email).trim().toLowerCase();
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(mail) || mail.length > 254) {
+            return res.status(400).json({ error: 'Enter a valid email address' });
+        }
+        updates.push('email = ?', 'username = ?');
+        values.push(mail, mail);
     }
+    if (full_name && String(full_name).trim()) { updates.push('full_name = ?'); values.push(String(full_name).trim()); }
+    if (role && ['manager', 'staff'].includes(role)) { updates.push('role = ?'); values.push(role); }
     if (updates.length === 0) return res.status(400).json({ error: 'No fields to update' });
     values.push(req.params.id);
     db.run(`UPDATE users SET ${updates.join(', ')} WHERE id = ?`, values, function(err) {
         if (err) {
-            if (String(err.message).includes('UNIQUE')) return res.status(409).json({ error: 'Username already taken' });
+            if (String(err.message).includes('UNIQUE')) return res.status(409).json({ error: 'That email is already in use' });
             return res.status(500).json({ error: err.message });
         }
         if (this.changes === 0) return res.status(404).json({ error: 'User not found' });

@@ -129,6 +129,18 @@ async function run() {
     r = await fetch(`${BASE}/api/auth/request-code`, json('POST', { email: 'staff@test.com' }));
     check('pending staff cannot request code', r.status === 403, `status ${r.status}`);
 
+    // Owner adds a staff member directly (passwordless) — active immediately.
+    r = await fetch(`${BASE}/api/users`, json('POST', { full_name: 'Direct Staff', email: 'direct@test.com', role: 'staff' }, auth));
+    const created = await r.json();
+    check('owner adds staff directly', r.status === 201 && created.id > 0, `status ${r.status}`);
+    r = await fetch(`${BASE}/api/auth/request-code`, json('POST', { email: 'direct@test.com' }));
+    check('new staff can request a sign-in code', r.status === 200, `status ${r.status}`);
+
+    // Deleting a user must also remove their sign-in code rows (FK) — this
+    // exact case used to fail with "FOREIGN KEY constraint failed".
+    r = await fetch(`${BASE}/api/users/${created.id}`, { method: 'DELETE', headers: auth });
+    check('staff with sign-in codes deletable', r.status === 200, `status ${r.status}`);
+
     // ---- guest checkout: retail, server-side total ----
     // Expected totals derive from the seeded product so the test tracks the
     // catalogue: managed sizes win, otherwise base price (+0 modifier size).
