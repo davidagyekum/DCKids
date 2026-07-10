@@ -338,73 +338,146 @@ function initSeedData() {
 /* ============================================================
    SECTION 3: AUTHENTICATION
    ============================================================ */
-function handleLogin(e) {
-    e.preventDefault();
-    var username = document.getElementById('login-username').value;
-    var password = document.getElementById('login-password').value;
-    var errorEl = document.getElementById('login-error');
-    var infoEl = document.getElementById('login-info');
-    if (infoEl) infoEl.textContent = '';
+// Passwordless sign-in: email -> 6-digit code -> session. No passwords, no
+// offline fallback (a real session requires the server to issue a JWT).
+var _loginEmail = '';
 
-    fetch(API_URL + '/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username: username, password: password })
-    })
-    .then(function(res) {
-        var contentType = res.headers.get('content-type') || '';
-        if (!res.ok) {
-            // Surface the server's own message (e.g. "awaiting the owner's
-            // approval") — a flat "Invalid credentials" would hide the real
-            // state from a pending requester.
-            if (contentType.includes('application/json')) {
-                return res.json().then(function(d) {
-                    var err = new Error(d.error || 'Invalid credentials');
-                    err.serverAnswered = true;
-                    throw err;
-                });
-            }
-            throw new Error('Invalid credentials');
-        }
-        if (!contentType.includes('application/json')) throw new Error('Invalid credentials');
-        return res.json();
-    })
-    .then(function(data) {
-        localStorage.setItem('adminToken', data.accessToken);
-        localStorage.setItem('adminRole', data.role);
-        errorEl.style.display = 'none';
-        showDashboard(data.role);
-    })
-    .catch(function(err) {
-        // The server answered (wrong password / pending / rejected): show its
-        // message. The offline fallback below is only for an unreachable API.
-        if (err && err.serverAnswered) {
-            errorEl.textContent = err.message;
-            errorEl.style.display = 'block';
-            return;
-        }
-        // Fallback for live server prototype without node backend.
-        // Compares against a stored hash — never a plaintext password.
-        function _hashPw(s) {
-            var h = 0x811c9dc5;
-            for (var i = 0; i < s.length; i++) {
-                h ^= s.charCodeAt(i);
-                h = (h + ((h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24))) >>> 0;
-            }
-            return ('00000000' + h.toString(16)).slice(-8);
-        }
-        var fallbackHash = localStorage.getItem('dcKidsAdminPwHash') || _hashPw('admin123');
-        if (username === 'admin' && _hashPw(password) === fallbackHash) {
-            console.warn("Using local fallback login due to API failure");
-            localStorage.setItem('adminToken', 'fallback-token-admin');
-            localStorage.setItem('adminRole', 'manager');
-            errorEl.style.display = 'none';
-            showDashboard('manager');
-            return;
-        }
-        errorEl.textContent = 'Invalid credentials';
-        errorEl.style.display = 'block';
+function _loginShowStep(step) {
+    ['email', 'code', 'recovery'].forEach(function (s) {
+        var el = document.getElementById('login-step-' + s);
+        if (el) el.style.display = (s === step) ? 'block' : 'none';
     });
+}
+function _loginError(msg) {
+    var el = document.getElementById('login-error');
+    if (el) { el.textContent = msg || ''; el.style.display = msg ? 'block' : 'none'; }
+}
+function _loginInfo(msg) {
+    var el = document.getElementById('login-info');
+    if (el) el.textContent = msg || '';
+}
+
+function requestLoginCode(e) {
+    if (e) e.preventDefault();
+    var email = (document.getElementById('login-email').value || '').trim().toLowerCase();
+    var btn = document.getElementById('login-send-code-btn');
+    _loginError(''); _loginInfo('');
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return _loginError('Enter a valid email.');
+    if (btn) { btn.disabled = true; btn.textContent = 'Sending…'; }
+    fetch(API_URL + '/auth/request-code', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: email })
+    })
+    .then(function (res) { return res.json().then(function (d) { return { ok: res.ok, data: d }; }); })
+    .then(function (r) {
+        if (!r.ok) throw new Error(r.data.error || 'Could not send a code.');
+        _loginEmail = email;
+        var to = document.getElementById('login-code-sent-to');
+        if (to) to.textContent = email;
+        _loginShowStep('code');
+        var codeEl = document.getElementById('login-code');
+        if (codeEl) { codeEl.value = ''; codeEl.focus(); }
+    })
+    .catch(function (err) {
+        _loginError(err.message === 'Failed to fetch' ? 'Server unavailable — try again later.' : err.message);
+    })
+    .finally(function () { if (btn) { btn.disabled = false; btn.textContent = 'Send code'; } });
+}
+
+function resendLoginCode(e) {
+    if (e) e.preventDefault();
+    var emailEl = document.getElementById('login-email');
+    if (emailEl && _loginEmail) emailEl.value = _loginEmail;
+    requestLoginCode(e);
+}
+
+function loginBackToEmail(e) {
+    if (e) e.preventDefault();
+    _loginError(''); _loginInfo('');
+    _loginShowStep('email');
+    var el = document.getElementById('login-email'); if (el) el.focus();
+}
+
+function showRecoveryLogin(e) {
+    if (e) e.preventDefault();
+    _loginError(''); _loginInfo('');
+    var re = document.getElementById('login-recovery-email');
+    if (re && _loginEmail) re.value = _loginEmail;
+    _loginShowStep('recovery');
+}
+
+function _finishLogin(data) {
+    localStorage.setItem('adminToken', data.accessToken);
+    localStorage.setItem('adminRole', data.role);
+    _loginError('');
+    var proceed = function () { showDashboard(data.role); };
+    if (data.recoveryCodes && data.recoveryCodes.length) {
+        showRecoveryCodes(data.recoveryCodes, proceed);
+    } else {
+        proceed();
+    }
+}
+
+function verifyLoginCode(e) {
+    if (e) e.preventDefault();
+    var code = (document.getElementById('login-code').value || '').trim();
+    var btn = document.getElementById('login-verify-btn');
+    _loginError('');
+    if (!/^\d{6}$/.test(code)) return _loginError('Enter the 6-digit code.');
+    if (btn) { btn.disabled = true; btn.textContent = 'Verifying…'; }
+    fetch(API_URL + '/auth/verify-code', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: _loginEmail, code: code })
+    })
+    .then(function (res) { return res.json().then(function (d) { return { ok: res.ok, data: d }; }); })
+    .then(function (r) {
+        if (!r.ok) throw new Error(r.data.error || 'Incorrect code.');
+        _finishLogin(r.data);
+    })
+    .catch(function (err) {
+        _loginError(err.message === 'Failed to fetch' ? 'Server unavailable — try again later.' : err.message);
+    })
+    .finally(function () { if (btn) { btn.disabled = false; btn.textContent = 'Verify & sign in'; } });
+}
+
+function recoveryLogin(e) {
+    if (e) e.preventDefault();
+    var email = (document.getElementById('login-recovery-email').value || '').trim().toLowerCase();
+    var code = (document.getElementById('login-recovery-code').value || '').trim();
+    _loginError('');
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || !code) return _loginError('Enter your email and a recovery code.');
+    fetch(API_URL + '/auth/recovery', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: email, code: code })
+    })
+    .then(function (res) { return res.json().then(function (d) { return { ok: res.ok, data: d }; }); })
+    .then(function (r) {
+        if (!r.ok) throw new Error(r.data.error || 'Invalid recovery code.');
+        _finishLogin(r.data);
+    })
+    .catch(function (err) {
+        _loginError(err.message === 'Failed to fetch' ? 'Server unavailable — try again later.' : err.message);
+    });
+}
+
+// Show one-time recovery codes, then run onContinue (proceed to dashboard/login).
+function showRecoveryCodes(codes, onContinue) {
+    var overlay = document.getElementById('recovery-codes-overlay');
+    var list = document.getElementById('recovery-codes-list');
+    var cont = document.getElementById('recovery-codes-continue');
+    if (!overlay || !list) { if (onContinue) onContinue(); return; }
+    window._lastRecoveryCodes = codes.slice();
+    list.innerHTML = codes.map(function (c) { return '<li>' + escapeHtml(c) + '</li>'; }).join('');
+    overlay.classList.add('open');
+    if (cont) cont.onclick = function () { overlay.classList.remove('open'); if (onContinue) onContinue(); };
+}
+function copyRecoveryCodes() {
+    var codes = window._lastRecoveryCodes || [];
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(codes.join('\n')).then(function () {
+            if (typeof showToast === 'function') showToast('Recovery codes copied', 'success');
+        });
+    }
 }
 
 /* ── Request-access (sign-up) view ── */
@@ -433,8 +506,6 @@ function handleRegister(e) {
     var name = (document.getElementById('signup-name').value || '').trim();
     var email = (document.getElementById('signup-email').value || '').trim();
     var phone = (document.getElementById('signup-phone').value || '').trim();
-    var pw = document.getElementById('signup-password').value || '';
-    var pw2 = document.getElementById('signup-password2').value || '';
     var errEl = document.getElementById('signup-error');
     var btn = document.getElementById('signup-btn');
     function fail(msg) { if (errEl) errEl.textContent = msg; }
@@ -442,33 +513,90 @@ function handleRegister(e) {
 
     if (name.length < 2) return fail('Please enter your full name');
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return fail('Please enter a valid email address');
-    if (pw.length < 6) return fail('Password must be at least 6 characters');
-    if (pw !== pw2) return fail('Passwords do not match');
 
     if (btn) { btn.disabled = true; btn.textContent = 'Sending request…'; }
     fetch(API_URL + '/admin/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ full_name: name, email: email, phone: phone, password: pw })
+        body: JSON.stringify({ full_name: name, email: email, phone: phone })
     })
     .then(function(res) { return res.json().then(function(d) { return { ok: res.ok, data: d }; }); })
     .then(function(r) {
         if (!r.ok) throw new Error(r.data.error || 'Could not submit request');
-        showLoginView();
-        var info = document.getElementById('login-info');
-        if (info) info.textContent = 'Request sent! You can sign in once the owner approves your account.';
-        var userEl = document.getElementById('login-username');
-        if (userEl) userEl.value = email;
-        ['signup-name', 'signup-email', 'signup-phone', 'signup-password', 'signup-password2'].forEach(function(id) {
+        ['signup-name', 'signup-email', 'signup-phone'].forEach(function(id) {
             var el = document.getElementById(id);
             if (el) el.value = '';
         });
+        var backToLogin = function (infoMsg) {
+            showLoginView();
+            _loginShowStep('email');
+            _loginInfo(infoMsg);
+            var emailEl = document.getElementById('login-email');
+            if (emailEl) emailEl.value = email;
+        };
+        if (r.data.owner && r.data.recoveryCodes) {
+            // First account = the owner: active immediately. Show recovery
+            // codes once, then drop them on the login step, email prefilled.
+            showRecoveryCodes(r.data.recoveryCodes, function () {
+                backToLogin('Your owner account is active — request a sign-in code below.');
+            });
+        } else {
+            backToLogin('Request sent! You can sign in once a manager approves your account.');
+        }
     })
     .catch(function(err) {
         fail(err.message === 'Failed to fetch' ? 'Server unavailable — try again later.' : err.message);
     })
     .finally(function() {
         if (btn) { btn.disabled = false; btn.textContent = 'Request access'; }
+    });
+}
+
+// ── Google Sign-In (primary login path) ──
+// Self-gating: asks the server whether a Google client id is configured. If not,
+// the button stays hidden and email-OTP is the only path — nothing breaks.
+var _gisScriptLoaded = false;
+function initGoogleSignIn() {
+    fetch(API_URL + '/auth/config')
+    .then(function (res) { return res.json(); })
+    .then(function (cfg) {
+        if (!cfg || !cfg.googleClientId) return;
+        var wrap = document.getElementById('google-signin-wrap');
+        if (wrap) wrap.style.display = 'block';
+        _loadGisScript(function () {
+            if (!window.google || !google.accounts || !google.accounts.id) return;
+            google.accounts.id.initialize({ client_id: cfg.googleClientId, callback: handleGoogleCredential });
+            var btn = document.getElementById('google-signin-btn');
+            if (btn) google.accounts.id.renderButton(btn, { theme: 'outline', size: 'large', text: 'continue_with', shape: 'pill', width: 300 });
+        });
+    })
+    .catch(function () { /* silent — OTP still works */ });
+}
+
+function _loadGisScript(cb) {
+    if (_gisScriptLoaded) return cb();
+    var s = document.createElement('script');
+    s.src = 'https://accounts.google.com/gsi/client';
+    s.async = true; s.defer = true;
+    s.onload = function () { _gisScriptLoaded = true; cb(); };
+    s.onerror = function () { /* offline / blocked — OTP still works */ };
+    document.head.appendChild(s);
+}
+
+function handleGoogleCredential(response) {
+    _loginError(''); _loginInfo('');
+    if (!response || !response.credential) return _loginError('Google sign-in was cancelled.');
+    fetch(API_URL + '/auth/google', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ credential: response.credential })
+    })
+    .then(function (res) { return res.json().then(function (d) { return { ok: res.ok, data: d }; }); })
+    .then(function (r) {
+        if (!r.ok) throw new Error(r.data.error || 'Google sign-in failed.');
+        _finishLogin(r.data);
+    })
+    .catch(function (err) {
+        _loginError(err.message === 'Failed to fetch' ? 'Server unavailable — try again later.' : err.message);
     });
 }
 
@@ -6628,20 +6756,26 @@ function saveStoreConfig(e) {
    SECTION 29: SETUP ALL EVENT LISTENERS
    ============================================================ */
 function setupEventListeners() {
-    // Login button
-    var loginBtn = document.getElementById('login-btn');
-    if (loginBtn) {
-        loginBtn.addEventListener('click', handleLogin);
+    // Passwordless sign-in: Enter advances each step (buttons are wired inline).
+    var loginEmailEl = document.getElementById('login-email');
+    if (loginEmailEl) {
+        loginEmailEl.addEventListener('keyup', function(e) {
+            if (e.key === 'Enter') requestLoginCode(e);
+        });
     }
-
-    var loginPassword = document.getElementById('login-password');
-    if (loginPassword) {
-        loginPassword.addEventListener('keyup', function(e) {
-            if (e.key === 'Enter') handleLogin(e);
+    var loginCodeEl = document.getElementById('login-code');
+    if (loginCodeEl) {
+        loginCodeEl.addEventListener('keyup', function(e) {
+            if (e.key === 'Enter') verifyLoginCode(e);
+        });
+    }
+    var recoveryCodeEl = document.getElementById('login-recovery-code');
+    if (recoveryCodeEl) {
+        recoveryCodeEl.addEventListener('keyup', function(e) {
+            if (e.key === 'Enter') recoveryLogin(e);
         });
     }
 
-    var togglePasswordBtn = document.getElementById('toggle-password-btn');
     var changeRoleBtn = document.getElementById('change-role-btn');
     if (changeRoleBtn) {
         changeRoleBtn.addEventListener('click', function() {
@@ -6656,19 +6790,6 @@ function setupEventListeners() {
     var storeConfigForm = document.getElementById('store-config-form');
     if (storeConfigForm) {
         storeConfigForm.addEventListener('submit', saveStoreConfig);
-    }
-    if (togglePasswordBtn && loginPassword) {
-        togglePasswordBtn.addEventListener('click', function() {
-            var type = loginPassword.getAttribute('type') === 'password' ? 'text' : 'password';
-            loginPassword.setAttribute('type', type);
-            // Optionally change icon based on state
-            var svg = this.querySelector('svg');
-            if (type === 'text') {
-                svg.innerHTML = '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21" />';
-            } else {
-                svg.innerHTML = '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />';
-            }
-        });
     }
 
     // Logout
@@ -7159,6 +7280,9 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // Init notifications badge
     renderNotifications();
+
+    // Render "Continue with Google" on the login screen (self-gating on config)
+    initGoogleSignIn();
 
     // Check if already logged in — verify token is still valid
     var token = localStorage.getItem('adminToken');

@@ -18,7 +18,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Playfair+Display:wght@500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="admin.css?v=97">
+  <link rel="stylesheet" href="admin.css?v=111">
   <!-- CRITICAL MOBILE FIX — inline so it always loads with the HTML,
        bypasses any stale service-worker or browser CSS cache.
        These rules ensure the sidebar collapses on phones/tablets. -->
@@ -85,7 +85,7 @@
       display: flex;
       align-items: center;
       justify-content: center;
-      background: url('images/IMG_8429.PNG') center center / cover no-repeat;
+      background: url('images/IMG_8409.PNG') center center / cover no-repeat;
       position: relative;
       padding: 16px;
     }
@@ -107,6 +107,13 @@
       padding: 2rem; /* p-8 */
       box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25); /* shadow-2xl */
       text-align: center;
+      /* Small screens: never overflow the viewport — scroll inside the card */
+      max-height: calc(100dvh - 32px);
+      overflow-y: auto;
+    }
+    @media (max-width: 420px) {
+      .login-card { padding: 1.5rem 1.25rem; }
+      .login-brand img { height: 64px; }
     }
     .login-brand { margin-bottom: 24px; }
     .login-brand img {
@@ -196,7 +203,7 @@
       text-align: left;
     }
     .login-error:not(:empty) { display: block; }
-    #login-btn {
+    #login-btn, .login-action-btn {
       width: 100%;
       padding: 12px;
       background: #16a34a; /* bg-green-600 */
@@ -209,9 +216,49 @@
       transition: background 0.2s, transform 0.1s;
       margin-top: 16px;
     }
-    #login-btn:hover { background: #15803d; /* hover:bg-green-700 */ transform: translateY(-1px); }
-    #login-btn:active { transform: translateY(0); }
+    #login-btn:hover, .login-action-btn:hover { background: #15803d; /* hover:bg-green-700 */ transform: translateY(-1px); }
+    #login-btn:active, .login-action-btn:active { transform: translateY(0); }
+    .login-action-btn:disabled { opacity: 0.6; cursor: not-allowed; transform: none; }
     .login-hint { color: #9ca3af; font-size: 0.8rem; margin-top: 16px; text-align: center; }
+    /* OTP sign-in helper text + step links */
+    .login-substep { color: #6b7280; font-size: 0.875rem; margin: 0 0 14px; text-align: left; line-height: 1.5; }
+    .login-substep strong { color: #1a1a2e; }
+    .login-substep-links { margin-top: 14px; text-align: center; font-size: 0.85rem; color: #9ca3af; }
+    .login-substep-links a { color: #fc4c7a; font-weight: 600; text-decoration: none; }
+    .login-substep-links a:hover { text-decoration: underline; }
+    #login-code { letter-spacing: 6px; font-weight: 700; text-align: center; }
+    /* Google Sign-In button + "or" divider */
+    .google-signin-wrap { margin-bottom: 4px; }
+    .google-signin-btn { display: flex; justify-content: center; }
+    .login-or {
+      display: flex; align-items: center; text-align: center;
+      color: #9ca3af; font-size: 0.8rem; margin: 16px 0 4px;
+    }
+    .login-or::before, .login-or::after {
+      content: ''; flex: 1; height: 1px; background: #e5e7eb;
+    }
+    .login-or span { padding: 0 12px; }
+    /* Recovery-codes overlay (shown once after owner sign-up / first staff login) */
+    .rc-overlay {
+      position: fixed; inset: 0; z-index: 3000;
+      background: rgba(0,0,0,0.6); display: none;
+      align-items: center; justify-content: center; padding: 20px;
+    }
+    .rc-overlay.open { display: flex; }
+    .rc-modal {
+      background: #fff; border-radius: 16px; padding: 28px 26px;
+      max-width: 440px; width: 100%; box-shadow: 0 30px 80px rgba(0,0,0,0.4);
+      max-height: 90vh; overflow-y: auto; text-align: center;
+    }
+    .rc-modal h2 { font-size: 1.35rem; font-weight: 800; color: #1a1a2e; margin: 0 0 8px; }
+    .rc-modal p { color: #6b7280; font-size: 0.9rem; line-height: 1.5; margin: 0 0 16px; }
+    .rc-list {
+      list-style: none; margin: 0 0 8px; padding: 14px;
+      background: #f8f8fa; border: 1px solid #ececf1; border-radius: 12px;
+      display: grid; grid-template-columns: 1fr 1fr; gap: 8px 14px;
+      font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 0.95rem;
+      font-weight: 700; color: #1a1a2e; letter-spacing: 1px;
+    }
     /* Link under the login card that switches to the request-access view */
     .login-request-access {
       margin-top: 14px;
@@ -247,46 +294,97 @@
     <div class="login-card">
       <div class="login-brand">
         <img src="icon.png" alt="DC Kids Logo">
-        <h1 class="login-title">Admin Login</h1>
+        <h1 class="login-title">Admin sign in</h1>
       </div>
-      <div class="login-form">
+
+      <div id="login-info" class="login-info" role="status" aria-live="polite"></div>
+      <div id="login-error" class="login-error" role="alert" aria-live="polite"></div>
+
+      <!-- Step 1: enter email -->
+      <div id="login-step-email" class="login-form">
+        <!-- Google Sign-In (primary). Hidden until /api/auth/config confirms a
+             client id is configured; otherwise email-OTP below is the only path. -->
+        <div id="google-signin-wrap" class="google-signin-wrap" style="display:none;">
+          <div id="google-signin-btn" class="google-signin-btn"></div>
+          <div class="login-or"><span>or</span></div>
+        </div>
+        <p class="login-substep">Enter your email and we'll send you a 6-digit sign-in code.</p>
         <div class="form-group">
-          <label for="login-username">Username</label>
+          <label for="login-email">Email</label>
           <div class="input-wrapper">
             <svg class="input-icon" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 4.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
             </svg>
-            <input type="text" id="login-username" placeholder="Username or email" autocomplete="username" aria-label="Username or email">
+            <input type="email" id="login-email" placeholder="you@example.com" autocomplete="email" aria-label="Email">
+          </div>
+        </div>
+        <button id="login-send-code-btn" type="button" class="login-action-btn" onclick="requestLoginCode(event)">Send code</button>
+      </div>
+
+      <!-- Step 2: enter the 6-digit code -->
+      <div id="login-step-code" class="login-form" style="display:none;">
+        <p class="login-substep">We sent a 6-digit code to <strong id="login-code-sent-to"></strong>. Enter it below (valid for 10 minutes).</p>
+        <div class="form-group">
+          <label for="login-code">6-digit code</label>
+          <div class="input-wrapper">
+            <svg class="input-icon" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
+            </svg>
+            <input type="text" inputmode="numeric" maxlength="6" id="login-code" placeholder="123456" autocomplete="one-time-code" aria-label="6-digit code">
+          </div>
+        </div>
+        <button id="login-verify-btn" type="button" class="login-action-btn" onclick="verifyLoginCode(event)">Verify &amp; sign in</button>
+        <p class="login-substep-links">
+          <a href="#" onclick="resendLoginCode(event)">Resend code</a> &nbsp;&middot;&nbsp;
+          <a href="#" onclick="loginBackToEmail(event)">Use a different email</a>
+        </p>
+      </div>
+
+      <!-- Backup: recovery code -->
+      <div id="login-step-recovery" class="login-form" style="display:none;">
+        <p class="login-substep">Can't get the email? Enter your email and one of your one-time recovery codes.</p>
+        <div class="form-group">
+          <label for="login-recovery-email">Email</label>
+          <div class="input-wrapper">
+            <svg class="input-icon" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 4.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+            </svg>
+            <input type="email" id="login-recovery-email" placeholder="you@example.com" autocomplete="email" aria-label="Email">
           </div>
         </div>
         <div class="form-group">
-          <label for="login-password">Password</label>
+          <label for="login-recovery-code">Recovery code</label>
           <div class="input-wrapper">
             <svg class="input-icon" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
             </svg>
-            <input type="password" id="login-password" placeholder="Password" autocomplete="current-password" aria-label="Password">
-            <button type="button" class="toggle-password" id="toggle-password-btn" aria-label="Toggle password visibility">
-              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
-              </svg>
-            </button>
+            <input type="text" id="login-recovery-code" placeholder="XXXXX-XXXXX" autocomplete="off" aria-label="Recovery code">
           </div>
-          <a href="#" class="forgot-password">Forgot password?</a>
         </div>
-        <div id="login-info" class="login-info" role="status" aria-live="polite"></div>
-        <div id="login-error" class="login-error" role="alert" aria-live="polite"></div>
-        <button id="login-btn" type="button" aria-label="Log in">Login</button>
-        <p class="login-hint">Default: <strong>admin</strong> / <strong>admin123</strong></p>
-        <p class="login-request-access">Need admin access? <a href="#" onclick="showSignupView(event)">Request access</a></p>
+        <button type="button" class="login-action-btn" onclick="recoveryLogin(event)">Sign in with recovery code</button>
+        <p class="login-substep-links"><a href="#" onclick="loginBackToEmail(event)">Back to email sign-in</a></p>
       </div>
+
+      <p class="login-request-access"><a href="#" onclick="showRecoveryLogin(event)">Use a recovery code instead</a></p>
+      <p class="login-request-access">Need admin access? <a href="#" onclick="showSignupView(event)">Request access</a></p>
+    </div>
+  </div>
+
+  <!-- Recovery codes shown once (owner after sign-up, staff after first login) -->
+  <div id="recovery-codes-overlay" class="rc-overlay">
+    <div class="rc-modal">
+      <h2>Save your recovery codes</h2>
+      <p>If you ever can't receive an email code, sign in with one of these instead. Each works once. Store them somewhere safe &mdash; they won't be shown again.</p>
+      <ul id="recovery-codes-list" class="rc-list"></ul>
+      <button type="button" class="login-action-btn" onclick="copyRecoveryCodes()">Copy codes</button>
+      <button type="button" id="recovery-codes-continue" class="login-action-btn">I've saved them &mdash; continue</button>
     </div>
   </div>
 
   <!-- ======================== SIGN-UP (REQUEST ACCESS) CONTAINER ======================== -->
   <div id="signup-container" class="signup-container" style="display:none;">
-    <!-- Left: brand + lifestyle panel (hidden on small screens) -->
+    <div class="signup-shell">
+    <!-- Left: glass brand panel (stacks on top on small screens) -->
     <aside class="signup-hero">
       <div class="signup-hero__logo">
         <img src="icon.png" alt="">
@@ -363,26 +461,7 @@
               <input type="tel" id="signup-phone" placeholder="e.g. 054 123 4567" autocomplete="tel" aria-label="Phone number (optional)">
             </div>
           </div>
-          <div class="form-group">
-            <label for="signup-password">Password</label>
-            <div class="signup-input-wrap">
-              <svg class="signup-input-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
-              <input type="password" id="signup-password" placeholder="At least 6 characters" autocomplete="new-password" aria-label="Password">
-              <button type="button" class="signup-eye" aria-label="Show password" onclick="var i=document.getElementById('signup-password'); i.type = i.type==='password' ? 'text' : 'password';">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
-              </button>
-            </div>
-          </div>
-          <div class="form-group">
-            <label for="signup-password2">Confirm password</label>
-            <div class="signup-input-wrap">
-              <svg class="signup-input-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
-              <input type="password" id="signup-password2" placeholder="Re-enter your password" autocomplete="new-password" aria-label="Confirm password">
-              <button type="button" class="signup-eye" aria-label="Show password" onclick="var i=document.getElementById('signup-password2'); i.type = i.type==='password' ? 'text' : 'password';">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
-              </button>
-            </div>
-          </div>
+          <p class="signup-passwordless-note">No password needed — you'll sign in with a 6-digit code sent to your email each time.</p>
           <div id="signup-error" class="signup-error" role="alert" aria-live="polite"></div>
           <button id="signup-btn" type="button" class="signup-btn" onclick="handleRegister(event)" aria-label="Request access">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/></svg>
@@ -395,6 +474,7 @@
         </div>
       </div>
     </main>
+    </div>
   </div>
 
   <!-- ======================== DASHBOARD CONTAINER ======================== -->
@@ -4720,7 +4800,7 @@
               <span>Log out</span>
             </button>
           </div>
-          <div class="settings-list"><button class="settings-row" type="button" onclick="openModal('modal-settings-store')"><span class="settings-row__ic ic-violet"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l1.5-5h15L21 9"></path><path d="M4 9v10a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1V9"></path><path d="M9 20v-6h6v6"></path></svg></span><span class="settings-row__txt"><span class="settings-row__title">Storefront Configuration</span><span class="settings-row__desc">WhatsApp, wholesale &amp; store notice</span></span><svg class="settings-row__chev" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg></button><button class="settings-row" type="button" onclick="openModal('modal-settings-profile')"><span class="settings-row__ic ic-pink"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg></span><span class="settings-row__txt"><span class="settings-row__title">Profile</span><span class="settings-row__desc">Your display name &amp; phone</span></span><svg class="settings-row__chev" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg></button><button class="settings-row" type="button" onclick="openModal('modal-settings-password')"><span class="settings-row__ic ic-amber"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg></span><span class="settings-row__txt"><span class="settings-row__title">Change Password</span><span class="settings-row__desc">Update your admin password</span></span><svg class="settings-row__chev" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg></button><button class="settings-row" type="button" onclick="openCategoryManager()"><span class="settings-row__ic ic-violet"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"></path><line x1="7" y1="7" x2="7.01" y2="7"></line></svg></span><span class="settings-row__txt"><span class="settings-row__title">Product Categories</span><span class="settings-row__desc">Add, rename &amp; remove categories</span></span><svg class="settings-row__chev" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg></button><button class="settings-row" type="button" onclick="openModal('modal-settings-notifications')"><span class="settings-row__ic ic-green"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path><path d="M13.73 21a2 2 0 0 1-3.46 0"></path></svg></span><span class="settings-row__txt"><span class="settings-row__title">Notifications</span><span class="settings-row__desc">Choose which alerts you receive</span></span><svg class="settings-row__chev" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg></button></div>
+          <div class="settings-list"><button class="settings-row" type="button" onclick="openModal('modal-settings-store')"><span class="settings-row__ic ic-violet"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l1.5-5h15L21 9"></path><path d="M4 9v10a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1V9"></path><path d="M9 20v-6h6v6"></path></svg></span><span class="settings-row__txt"><span class="settings-row__title">Storefront Configuration</span><span class="settings-row__desc">WhatsApp, wholesale &amp; store notice</span></span><svg class="settings-row__chev" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg></button><button class="settings-row" type="button" onclick="openModal('modal-settings-profile')"><span class="settings-row__ic ic-pink"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg></span><span class="settings-row__txt"><span class="settings-row__title">Profile</span><span class="settings-row__desc">Your display name &amp; phone</span></span><svg class="settings-row__chev" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg></button><button class="settings-row" type="button" onclick="openCategoryManager()"><span class="settings-row__ic ic-violet"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"></path><line x1="7" y1="7" x2="7.01" y2="7"></line></svg></span><span class="settings-row__txt"><span class="settings-row__title">Product Categories</span><span class="settings-row__desc">Add, rename &amp; remove categories</span></span><svg class="settings-row__chev" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg></button><button class="settings-row" type="button" onclick="openModal('modal-settings-notifications')"><span class="settings-row__ic ic-green"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path><path d="M13.73 21a2 2 0 0 1-3.46 0"></path></svg></span><span class="settings-row__txt"><span class="settings-row__title">Notifications</span><span class="settings-row__desc">Choose which alerts you receive</span></span><svg class="settings-row__chev" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg></button></div>
         </div>
 
         <div id="modal-settings-store" class="modal-overlay" role="dialog" aria-modal="true" aria-label="Storefront Configuration" style="display:none;"><div class="modal-content"><div class="modal-header"><h2 class="modal-title">Storefront Configuration</h2><button class="modal-close-btn" type="button" aria-label="Close" onclick="closeModal('modal-settings-store')"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg></button></div><div class="modal-body"><form id="store-config-form">
@@ -6055,7 +6135,7 @@
 
   <!-- Scripts -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-  <script src="admin.js?v=97"></script>
+  <script src="admin.js?v=112"></script>
   <script>
     // Keep the admin page on fresh code: when an updated service worker takes
     // control, reload once (guarded against loops and first-registration).

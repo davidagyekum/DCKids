@@ -43,21 +43,31 @@ is up to your host:
 | `NODE_ENV` | **yes (production)** | Set to `production` to enable strict CORS, HSTS, and tight rate limiting. Unset = dev mode (open CORS, no HSTS). |
 | `JWT_SECRET` | **yes** | Secret for signing admin/customer sessions. Use a long random string (32+ chars). Never commit it. |
 | `ALLOWED_ORIGINS` | production | Comma-separated origins permitted by CORS, e.g. `https://dckidsbrand.com,https://www.dckidsbrand.com`. |
-| `ADMIN_PASSWORD` | recommended | Password for the seeded `admin` account on **first boot only**. If unset, a strong random password is generated and printed once to the server log — capture it. |
+| `OWNER_EMAIL` | recommended | Comma-separated emails auto-activated as owner (manager) on sign-up. Everyone else lands in `pending` and must be approved. Unset = the very first sign-up becomes owner. See §3. |
+| `RESEND_API_KEY` / `RESEND_FROM` | recommended | Sends the 6-digit sign-in codes via Resend. Unset = codes are only printed to the server log (fine for local dev, not production). |
+| `APP_URL` | recommended | Public base URL used in emails (e.g. `https://dckidsbrand.com`). |
 | `PORT` | no | Listening port (default 3000). Most hosts inject this automatically. |
 | `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` | no | Optional instant order alerts. `TELEGRAM_CHAT_ID` accepts **one or more** comma-separated destinations — each can be a personal chat id or a shared channel/group id. To add the new owner, append their id (e.g. `111111111,222222222`); every destination receives each order. For a channel, add the bot as an admin and use the channel id. |
 | `SHOP_NOTIFY_EMAIL`, `SMTP_*` | no | Optional transactional email. |
 
-## 3. First-boot admin account
+## 3. First admin account (passwordless)
 
-On a fresh database the server creates a single manager account:
+There is **no seeded admin and no default password**. Admin sign-in is
+passwordless: entering an email sends a **6-digit code** (via Resend; unset key =
+code printed to the server log). The first owner is claimed like this:
 
-- **Username:** `admin`
-- **Password:** value of `ADMIN_PASSWORD`, or a random one printed once in the
-  server log if that variable is unset.
-
-Log in and change it immediately (Admin → Settings → Change Password), or set
-`ADMIN_PASSWORD` before first boot. The old hardcoded `admin123` is no longer used.
+- Set **`OWNER_EMAIL`** to the address(es) that should be owners
+  (comma-separated) — e.g. your email plus the store owner's. Anyone signing up
+  with a listed email is **auto-activated as owner (manager)** and shown one-time
+  **recovery codes**; **everyone else lands in `pending`** and must be approved
+  from **Manage Staff → Access Requests**.
+- If `OWNER_EMAIL` is unset, the **very first sign-up becomes owner** — fine for
+  local dev, but set `OWNER_EMAIL` before exposing the admin publicly so a
+  stranger can't claim it first.
+- Only **managers** can approve requests (staff cannot), and the approver picks
+  each person's role — so approval power only spreads if you grant it.
+- **Recovery codes** are the backup sign-in if email is ever unavailable; each
+  works once.
 
 ## 4. Data & backups
 
@@ -72,6 +82,34 @@ Log in and change it immediately (Admin → Settings → Change Password), or se
 - [ ] `NODE_ENV=production` set on the host
 - [ ] `JWT_SECRET` is a fresh long random value
 - [ ] `ALLOWED_ORIGINS` lists your real domain(s)
-- [ ] `ADMIN_PASSWORD` set, or first-boot generated password captured and changed
+- [ ] `OWNER_EMAIL` set to your owner address(es) — so a stranger can't claim owner
+- [ ] `RESEND_API_KEY` + `RESEND_FROM` set (and a domain verified in Resend) so sign-in codes actually email
+- [ ] `APP_URL` set to your public URL (used in emails)
 - [ ] `server/inventory.db` on persistent storage
 - [ ] Served over HTTPS (required for the PWA service worker and HSTS)
+
+## 6. Google Sign-In setup (optional but recommended)
+
+"Continue with Google" is the fastest everyday login. It replaces the OTP *step*
+but keeps the same approve/reject gate — Google proves identity, your `users`
+table still decides access. Email-OTP and recovery codes remain as fallbacks.
+
+To turn it on:
+
+1. Go to <https://console.cloud.google.com/> → create (or pick) a project.
+2. **APIs & Services → OAuth consent screen**: set User type **External**, add an
+   app name + your support email, and add yourself as a **Test user** (or Publish
+   the app once you're ready for all staff).
+3. **APIs & Services → Credentials → Create credentials → OAuth client ID**:
+   - Application type: **Web application**
+   - **Authorized JavaScript origins**: add every origin the admin page loads from
+     — e.g. `http://localhost:3001` for local, and `https://dckidsbrand.com` for
+     production. (No redirect URI is needed — this uses the ID-token flow.)
+4. Copy the generated **Client ID** and set it in `server/.env`:
+   `GOOGLE_CLIENT_ID=xxxxxxxx.apps.googleusercontent.com`
+5. Restart the server. The button appears automatically; if the id is ever unset
+   or wrong, the page silently falls back to email-OTP.
+
+First Google sign-in from a new email creates a `pending` access request (unless
+the email is in `OWNER_EMAIL`), which an owner approves under **Manage Staff →
+Access Requests** — same as the email flow.

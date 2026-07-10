@@ -82,6 +82,147 @@ if (IS_PROD && (!process.env.JWT_SECRET || JWT_SECRET === 'dckids-super-secret-k
     process.exit(1);
 }
 
+// ---------------- Passwordless auth: email (Resend) + code helpers ----------------
+const https = require('https');
+const crypto = require('crypto');
+
+const RESEND_API_KEY = process.env.RESEND_API_KEY || '';
+const RESEND_FROM = process.env.RESEND_FROM || 'DC Kids Admin <onboarding@resend.dev>';
+const APP_URL = process.env.APP_URL || 'http://localhost:3001';
+
+// Google Sign-In (optional). When GOOGLE_CLIENT_ID is set, the admin login page
+// shows a "Continue with Google" button; when unset, the button is hidden and
+// email-OTP remains the only path. The client id is public (safe to expose to
+// the browser) — there is no client secret because we use the ID-token flow.
+const GOOGLE_CLIENT_ID = (process.env.GOOGLE_CLIENT_ID || '').trim();
+
+// Owner allowlist: a comma-separated list of emails in OWNER_EMAIL that are
+// auto-activated as owner (manager) on sign-up — e.g. your dev email now plus
+// the real admin's email at deploy. Everyone else goes to 'pending' and must be
+// approved. If OWNER_EMAIL is unset, we fall back to "first sign-up = owner" so
+// a fresh install still bootstraps (a startup warning nudges you to set it).
+const OWNER_EMAILS = (process.env.OWNER_EMAIL || '')
+    .split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
+if (OWNER_EMAILS.length === 0) {
+    console.warn('[auth] OWNER_EMAIL is not set — the FIRST sign-up will auto-become owner. Set OWNER_EMAIL in server/.env to lock owner claims to specific addresses.');
+}
+
+// Send an email via Resend's REST API using only the built-in https module (no
+// extra dependency). Fully graceful: a missing key or a failed send is logged
+// and swallowed — email problems must never break registration or sign-in.
+function sendEmail(to, subject, html) {
+    return new Promise((resolve) => {
+        if (!RESEND_API_KEY) {
+            console.log(`[email skipped: no RESEND_API_KEY] to=${to} subject="${subject}"`);
+            return resolve({ skipped: true });
+        }
+        const payload = JSON.stringify({ from: RESEND_FROM, to: [to], subject, html });
+        const request = https.request({
+            hostname: 'api.resend.com',
+            path: '/emails',
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': 'Bearer ' + RESEND_API_KEY,
+                'Content-Length': Buffer.byteLength(payload)
+            }
+        }, (r) => {
+            let body = '';
+            r.on('data', (d) => { body += d; });
+            r.on('end', () => {
+                if (r.statusCode >= 200 && r.statusCode < 300) resolve({ ok: true });
+                else { console.error(`[email failed ${r.statusCode}] ${body}`); resolve({ ok: false }); }
+            });
+        });
+        request.on('error', (e) => { console.error('[email error]', e.message); resolve({ ok: false }); });
+        request.write(payload);
+        request.end();
+    });
+}
+
+function escapeHtmlServer(s) {
+    return String(s == null ? '' : s)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+function genOtp() {
+    return String(crypto.randomInt(0, 1000000)).padStart(6, '0');
+}
+function genRecoveryPlain() {
+    const raw = crypto.randomBytes(5).toString('hex').toUpperCase(); // 10 hex chars
+    return raw.slice(0, 5) + '-' + raw.slice(5);
+}
+// Generate N fresh recovery codes for a user, store them hashed, return the
+// plaintext once (the only time they exist unhashed).
+async function generateRecoveryCodes(userId, n = 8) {
+    return new Promise((resolve) => {
+        db.run(`DELETE FROM recovery_codes WHERE user_id = ?`, [userId], async () => {
+            const codes = [];
+            for (let i = 0; i < n; i++) {
+                const c = genRecoveryPlain();
+                codes.push(c);
+                const h = await bcrypt.hash(c, 10);
+                db.run(`INSERT INTO recovery_codes (user_id, code_hash) VALUES (?, ?)`, [userId, h]);
+            }
+            resolve(codes);
+        });
+    });
+}
+function notifyManagersOfRequest(name, mail) {
+    db.all(`SELECT email FROM users WHERE role = 'manager' AND status = 'active' AND email IS NOT NULL`, [], (e, rows) => {
+        if (e || !rows) return;
+        rows.forEach((r) => sendEmail(
+            r.email,
+            'New DC Kids admin access request',
+            `<p><strong>${escapeHtmlServer(name)}</strong> (${escapeHtmlServer(mail)}) has requested admin access.</p>
+             <p>Approve or reject it in <a href="${APP_URL}/admin.html">Manage Staff &rsaquo; Access Requests</a>.</p>`
+        ));
+    });
+}
+// Verify a Google ID token (JWT credential from Google Identity Services) via
+// Google's tokeninfo endpoint — no extra dependency, matching the raw-https
+// approach used for email. Returns the token payload if it is genuinely
+// Google-issued, aimed at OUR client id, and carries a verified email;
+// otherwise null. Volume here is a handful of admin sign-ins a day, well within
+// tokeninfo's limits (local JWKS verification would be the move at high volume).
+function verifyGoogleIdToken(idToken) {
+    return new Promise((resolve) => {
+        if (!GOOGLE_CLIENT_ID || !idToken) return resolve(null);
+        const request = https.request({
+            hostname: 'oauth2.googleapis.com',
+            path: '/tokeninfo?id_token=' + encodeURIComponent(idToken),
+            method: 'GET'
+        }, (r) => {
+            let body = '';
+            r.on('data', (d) => { body += d; });
+            r.on('end', () => {
+                if (r.statusCode !== 200) return resolve(null);
+                try {
+                    const p = JSON.parse(body);
+                    const audOk = p.aud === GOOGLE_CLIENT_ID;
+                    const issOk = p.iss === 'accounts.google.com' || p.iss === 'https://accounts.google.com';
+                    const emailOk = p.email && (p.email_verified === true || p.email_verified === 'true');
+                    const notExpired = !p.exp || (Number(p.exp) * 1000 > Date.now());
+                    if (audOk && issOk && emailOk && notExpired) return resolve(p);
+                    resolve(null);
+                } catch (e) { resolve(null); }
+            });
+        });
+        request.on('error', () => resolve(null));
+        request.end();
+    });
+}
+
+function otpEmailHtml(code) {
+    return `<div style="font-family:Inter,Arial,sans-serif;max-width:460px">
+      <h2 style="margin:0 0 8px">Your sign-in code</h2>
+      <p style="color:#555;margin:0 0 16px">Enter this code to sign in to the DC Kids admin dashboard. It expires in 10 minutes.</p>
+      <div style="font-size:32px;font-weight:800;letter-spacing:8px;background:#f6f6f8;border-radius:12px;padding:16px 0;text-align:center">${code}</div>
+      <p style="color:#999;font-size:12px;margin-top:16px">If you didn't request this, you can ignore this email.</p>
+    </div>`;
+}
+
 // Basic in-memory rate limiting to prevent API abuse (disabled for localhost)
 const rateLimit = {};
 const RATE_LIMIT_WINDOW_MS = 60000; // 1 minute
@@ -175,67 +316,214 @@ const requireManager = (req, res, next) => {
     next();
 };
 
-// ---------------- AUTH ROUTES ---------------- //
-app.post('/api/login', loginLimiter, (req, res) => {
-    const { username, password } = req.body;
-    // Accept username OR email — access requests register with email only.
-    const ident = String(username || '').trim();
-    db.get(`SELECT * FROM users WHERE username = ? OR email = ?`, [ident, ident.toLowerCase()], async (err, user) => {
-        if (err) return res.status(500).json({ error: err.message });
-        if (!user) return res.status(400).json({ error: 'Cannot find user' });
+// ---------------- AUTH ROUTES (passwordless: email OTP + recovery) ---------------- //
 
-        try {
-            if (await bcrypt.compare(password, user.password_hash)) {
-                // Status gates the access-request workflow. NULL = legacy
-                // pre-migration account (the seeded admin) — treated as active.
-                if (user.status === 'pending') {
-                    return res.status(403).json({ error: 'Your access request is still awaiting the owner\'s approval.' });
-                }
-                if (user.status === 'rejected') {
-                    return res.status(403).json({ error: 'Your access request was declined. Contact the owner.' });
-                }
-                const accessToken = jwt.sign({ id: user.id, username: user.username, role: user.role }, JWT_SECRET, { expiresIn: '12h' });
-                res.json({ accessToken, role: user.role });
-            } else {
-                res.status(401).json({ error: 'Not Allowed' });
-            }
-        } catch {
-            res.status(500).send();
-        }
-    });
-});
-
-// Request admin access (public). Creates a PENDING account that cannot log in
-// until the owner approves it from Manage Staff. Role is fixed to 'staff' here
-// on purpose — requesters never choose their own role; the owner assigns it
-// at approval time.
-app.post('/api/admin/register', registerLimiter, async (req, res) => {
-    const { full_name, email, phone, password } = req.body || {};
+// Request access (public). Emails on the OWNER_EMAIL allowlist are auto-activated
+// as owner (manager) and shown recovery codes once; everyone else is created
+// 'pending' and must be approved by a manager. No passwords are collected.
+app.post('/api/admin/register', registerLimiter, (req, res) => {
+    const { full_name, email, phone } = req.body || {};
     const name = String(full_name || '').trim();
     const mail = String(email || '').trim().toLowerCase();
     if (name.length < 2 || name.length > 100) return res.status(400).json({ error: 'Please enter your full name' });
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(mail) || mail.length > 254) return res.status(400).json({ error: 'Please enter a valid email address' });
-    if (!password || String(password).length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters' });
 
-    try {
-        const hash = await bcrypt.hash(String(password), 10);
+    db.get(`SELECT COUNT(*) AS c FROM users WHERE status = 'active' AND role = 'manager'`, [], (err, row) => {
+        if (err) return res.status(500).json({ error: err.message });
+        // An email on the allowlist is always an owner. Without an allowlist,
+        // fall back to "first sign-up = owner" so a fresh install bootstraps.
+        const isOwner = OWNER_EMAILS.length > 0
+            ? OWNER_EMAILS.includes(mail)
+            : (!row || row.c === 0);
+        const status = isOwner ? 'active' : 'pending';
+        const role = isOwner ? 'manager' : 'staff';
         db.run(
             `INSERT INTO users (username, password_hash, role, email, full_name, phone, status, created_at)
-             VALUES (?, ?, 'staff', ?, ?, ?, 'pending', datetime('now'))`,
-            [mail, hash, mail, name, String(phone || '').trim() || null],
-            function (err) {
-                if (err) {
-                    if (String(err.message).includes('UNIQUE')) {
+             VALUES (?, NULL, ?, ?, ?, ?, ?, datetime('now'))`,
+            [mail, role, mail, name, String(phone || '').trim() || null, status],
+            async function (e2) {
+                if (e2) {
+                    if (String(e2.message).includes('UNIQUE')) {
                         return res.status(409).json({ error: 'An account with this email already exists' });
                     }
-                    return res.status(500).json({ error: err.message });
+                    return res.status(500).json({ error: e2.message });
                 }
-                res.status(201).json({ success: true, message: 'Request submitted — the owner will review it.' });
+                const userId = this.lastID;
+                if (isOwner) {
+                    const recoveryCodes = await generateRecoveryCodes(userId);
+                    db.run(`UPDATE users SET recovery_shown = 1 WHERE id = ?`, [userId]);
+                    sendEmail(mail, 'Your DC Kids admin account is ready',
+                        `<p>Hi ${escapeHtmlServer(name)}, your owner account is active.</p><p>Sign in at <a href="${APP_URL}/admin.html">${APP_URL}/admin.html</a> — we'll email you a 6-digit code each time.</p>`);
+                    return res.status(201).json({
+                        success: true, owner: true,
+                        message: 'Your owner account is active. Save your recovery codes below, then sign in with an email code.',
+                        recoveryCodes
+                    });
+                }
+                sendEmail(mail, 'DC Kids admin access requested',
+                    `<p>Hi ${escapeHtmlServer(name)}, we received your request for admin access.</p><p>A manager will review it, and you'll be able to sign in once you're approved.</p>`);
+                notifyManagersOfRequest(name, mail);
+                return res.status(201).json({ success: true, owner: false, message: 'Request submitted — a manager will review it.' });
             }
         );
-    } catch (e) {
-        res.status(500).json({ error: e.message });
+    });
+});
+
+// Step 1 of sign-in: email a 6-digit code to an ACTIVE account.
+app.post('/api/auth/request-code', loginLimiter, (req, res) => {
+    const mail = String((req.body && req.body.email) || '').trim().toLowerCase();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(mail)) return res.status(400).json({ error: 'Enter a valid email.' });
+    db.get(`SELECT * FROM users WHERE email = ?`, [mail], async (err, user) => {
+        if (err) return res.status(500).json({ error: err.message });
+        // Don't reveal whether an email exists, but be clear on pending/rejected.
+        if (!user) return res.json({ success: true, message: 'If that email has access, a code has been sent.' });
+        if (user.status === 'pending') return res.status(403).json({ error: 'Your access request is still awaiting approval.' });
+        if (user.status === 'rejected') return res.status(403).json({ error: 'Your access request was declined.' });
+        if (user.status !== 'active') return res.status(403).json({ error: 'This account is not active.' });
+
+        const code = genOtp();
+        const codeHash = await bcrypt.hash(code, 10);
+        const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
+        db.run(`DELETE FROM auth_codes WHERE user_id = ?`, [user.id], () => {
+            db.run(`INSERT INTO auth_codes (user_id, code_hash, expires_at, attempts) VALUES (?, ?, ?, 0)`,
+                [user.id, codeHash, expiresAt], (e2) => {
+                    if (e2) return res.status(500).json({ error: e2.message });
+                    // Operator-visible so the flow is testable in Resend test mode
+                    // (where email only delivers to your own Resend address).
+                    console.log(`\n[SIGN-IN CODE] ${mail} -> ${code}  (valid 10 min)\n`);
+                    sendEmail(mail, 'Your DC Kids admin sign-in code', otpEmailHtml(code));
+                    res.json({ success: true, message: 'A 6-digit code has been sent to your email.' });
+                });
+        });
+    });
+});
+
+// Step 2 of sign-in: verify the code and issue a session.
+app.post('/api/auth/verify-code', loginLimiter, (req, res) => {
+    const mail = String((req.body && req.body.email) || '').trim().toLowerCase();
+    const code = String((req.body && req.body.code) || '').trim();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(mail) || !/^\d{6}$/.test(code)) {
+        return res.status(400).json({ error: 'Enter the 6-digit code.' });
     }
+    db.get(
+        `SELECT u.*, c.id AS code_id, c.code_hash, c.expires_at, c.attempts
+         FROM users u JOIN auth_codes c ON c.user_id = u.id
+         WHERE u.email = ? ORDER BY c.id DESC LIMIT 1`,
+        [mail],
+        async (err, row) => {
+            if (err) return res.status(500).json({ error: err.message });
+            if (!row) return res.status(400).json({ error: 'No code found. Request a new one.' });
+            if (row.status !== 'active') return res.status(403).json({ error: 'This account is not active.' });
+            if (new Date(row.expires_at).getTime() < Date.now()) {
+                db.run(`DELETE FROM auth_codes WHERE id = ?`, [row.code_id]);
+                return res.status(400).json({ error: 'Code expired. Request a new one.' });
+            }
+            if (row.attempts >= 5) {
+                db.run(`DELETE FROM auth_codes WHERE id = ?`, [row.code_id]);
+                return res.status(429).json({ error: 'Too many attempts. Request a new code.' });
+            }
+            const ok = await bcrypt.compare(code, row.code_hash);
+            if (!ok) {
+                db.run(`UPDATE auth_codes SET attempts = attempts + 1 WHERE id = ?`, [row.code_id]);
+                return res.status(400).json({ error: 'Incorrect code.' });
+            }
+            db.run(`DELETE FROM auth_codes WHERE user_id = ?`, [row.id]);
+            const accessToken = jwt.sign({ id: row.id, username: row.email, role: row.role }, JWT_SECRET, { expiresIn: '12h' });
+            let recoveryCodes = null;
+            if (!row.recovery_shown) {
+                recoveryCodes = await generateRecoveryCodes(row.id);
+                db.run(`UPDATE users SET recovery_shown = 1 WHERE id = ?`, [row.id]);
+            }
+            res.json({ accessToken, role: row.role, recoveryCodes });
+        }
+    );
+});
+
+// Backup sign-in with a one-time recovery code (if email is unavailable).
+app.post('/api/auth/recovery', loginLimiter, (req, res) => {
+    const mail = String((req.body && req.body.email) || '').trim().toLowerCase();
+    const rc = String((req.body && req.body.code) || '').trim().toUpperCase().replace(/\s+/g, '');
+    if (!mail || !rc) return res.status(400).json({ error: 'Enter your email and a recovery code.' });
+    db.get(`SELECT * FROM users WHERE email = ? AND status = 'active'`, [mail], (err, user) => {
+        if (err) return res.status(500).json({ error: err.message });
+        if (!user) return res.status(400).json({ error: 'Invalid email or recovery code.' });
+        db.all(`SELECT id, code_hash FROM recovery_codes WHERE user_id = ? AND used_at IS NULL`, [user.id], async (e2, rows) => {
+            if (e2) return res.status(500).json({ error: e2.message });
+            for (const r of (rows || [])) {
+                if (await bcrypt.compare(rc, r.code_hash)) {
+                    db.run(`UPDATE recovery_codes SET used_at = datetime('now') WHERE id = ?`, [r.id]);
+                    const accessToken = jwt.sign({ id: user.id, username: user.email, role: user.role }, JWT_SECRET, { expiresIn: '12h' });
+                    return res.json({ accessToken, role: user.role });
+                }
+            }
+            res.status(400).json({ error: 'Invalid email or recovery code.' });
+        });
+    });
+});
+
+// Public: tells the admin login page whether Google Sign-In is available (and
+// with which client id). Returns null when unconfigured so the page silently
+// falls back to email-OTP. The client id is not a secret.
+app.get('/api/auth/config', (req, res) => {
+    res.json({ googleClientId: GOOGLE_CLIENT_ID || null });
+});
+
+// Primary sign-in: "Continue with Google". Verifies the Google ID token, then
+// applies the SAME access gate as the OTP flow — active signs in, pending/
+// rejected are refused, and an unknown email becomes a pending access request
+// (so one tap both requests access and, once approved, logs in). An allowlisted
+// OWNER_EMAIL is auto-activated as owner on first sign-in, mirroring /register.
+app.post('/api/auth/google', loginLimiter, async (req, res) => {
+    if (!GOOGLE_CLIENT_ID) return res.status(400).json({ error: 'Google sign-in is not configured.' });
+    const credential = String((req.body && req.body.credential) || '');
+    const payload = await verifyGoogleIdToken(credential);
+    if (!payload) return res.status(401).json({ error: 'Google sign-in failed. Please try again.' });
+
+    const mail = String(payload.email).trim().toLowerCase();
+    const name = String(payload.name || '').trim() || mail;
+    const sub = payload.sub || null;
+
+    db.get(`SELECT * FROM users WHERE email = ?`, [mail], async (err, user) => {
+        if (err) return res.status(500).json({ error: err.message });
+
+        if (!user) {
+            const isOwner = OWNER_EMAILS.includes(mail);
+            const status = isOwner ? 'active' : 'pending';
+            const role = isOwner ? 'manager' : 'staff';
+            db.run(
+                `INSERT INTO users (username, password_hash, role, email, full_name, phone, status, google_sub, created_at)
+                 VALUES (?, NULL, ?, ?, ?, NULL, ?, ?, datetime('now'))`,
+                [mail, role, mail, name, status, sub],
+                async function (e2) {
+                    if (e2) return res.status(500).json({ error: e2.message });
+                    const userId = this.lastID;
+                    if (isOwner) {
+                        const recoveryCodes = await generateRecoveryCodes(userId);
+                        db.run(`UPDATE users SET recovery_shown = 1 WHERE id = ?`, [userId]);
+                        const accessToken = jwt.sign({ id: userId, username: mail, role }, JWT_SECRET, { expiresIn: '12h' });
+                        return res.json({ accessToken, role, recoveryCodes });
+                    }
+                    notifyManagersOfRequest(name, mail);
+                    return res.status(403).json({ error: 'Access requested — an owner needs to approve your account before you can sign in.' });
+                }
+            );
+            return;
+        }
+
+        if (user.status === 'pending') return res.status(403).json({ error: 'Your access request is still awaiting approval.' });
+        if (user.status === 'rejected') return res.status(403).json({ error: 'Your access request was declined.' });
+        if (user.status !== 'active') return res.status(403).json({ error: 'This account is not active.' });
+
+        if (sub && !user.google_sub) db.run(`UPDATE users SET google_sub = ? WHERE id = ?`, [sub, user.id]);
+
+        let recoveryCodes = null;
+        if (!user.recovery_shown) {
+            recoveryCodes = await generateRecoveryCodes(user.id);
+            db.run(`UPDATE users SET recovery_shown = 1 WHERE id = ?`, [user.id]);
+        }
+        const accessToken = jwt.sign({ id: user.id, username: user.email, role: user.role }, JWT_SECRET, { expiresIn: '12h' });
+        res.json({ accessToken, role: user.role, recoveryCodes });
+    });
 });
 
 // Pending access requests (owner/manager only)
