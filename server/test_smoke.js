@@ -136,10 +136,20 @@ async function run() {
     r = await fetch(`${BASE}/api/auth/request-code`, json('POST', { email: 'direct@test.com' }));
     check('new staff can request a sign-in code', r.status === 200, `status ${r.status}`);
 
+    // Sign the new staff member in for real (OTP just requested above), so we
+    // can prove their session dies the moment they're deleted.
+    r = await fetch(`${BASE}/api/auth/verify-code`, json('POST', { email: 'direct@test.com', code: lastOtp }));
+    const staffLogin = await r.json();
+    check('direct staff can sign in', r.status === 200 && !!staffLogin.accessToken, `status ${r.status}`);
+
     // Deleting a user must also remove their sign-in code rows (FK) — this
     // exact case used to fail with "FOREIGN KEY constraint failed".
     r = await fetch(`${BASE}/api/users/${created.id}`, { method: 'DELETE', headers: auth });
     check('staff with sign-in codes deletable', r.status === 200, `status ${r.status}`);
+
+    // Their still-unexpired JWT must be dead immediately (per-request re-check).
+    r = await fetch(`${BASE}/api/orders`, { headers: { 'Authorization': `Bearer ${staffLogin.accessToken}` } });
+    check('deleted staff token revoked instantly', r.status === 403, `status ${r.status}`);
 
     // ---- guest checkout: retail, server-side total ----
     // Expected totals derive from the seeded product so the test tracks the

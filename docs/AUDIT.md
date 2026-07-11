@@ -27,27 +27,22 @@ remains, ranked by risk. **No code was changed during this audit.**
 | Security headers | ✅ code / ⚠️ deploy | nosniff/frame/referrer/permissions/HSTS set; live securityheaders.com scan pending a domain |
 
 ### Open security items (ranked)
-- **S1 · MEDIUM — Sessions can't be revoked server-side.** JWTs are stateless: a deleted,
-  rejected, or demoted staff member's token keeps working for up to 12 h, and logout only
-  clears the browser. Acceptable for a 2-person team; before the team grows, add a
-  status check on authenticated requests (one indexed SELECT) or a token denylist.
-- **S2 · LOW — Three unescaped `innerHTML` sinks in admin.js** (toast at ~757, upload
-  preview at ~2077, staff-table error row at ~8276) interpolate API `err.message` raw.
-  Every current message is a server-controlled constant, so there is no exploit today —
-  but one future endpoint echoing user input into an error would turn these into XSS.
-  Cheap hardening: wrap with `escapeHtml()`.
+- **S1 · ~~MEDIUM~~ FIXED 2026-07-11** — authenticated requests now re-check the account
+  in the DB: deleted/rejected/demoted staff lose access on their next request, and role
+  comes from the DB rather than the token. Test: "deleted staff token revoked instantly".
+- **S2 · ~~LOW~~ FIXED 2026-07-11** — the three admin `innerHTML` error sinks (toast,
+  upload preview, staff-table error row) now escape their message.
 - **S3 · LOW — No Content-Security-Policy header.** Inline scripts and the Tailwind CDN
   make a strict CSP a real project; document as post-launch hardening, not a quick fix.
-- **S4 · INFO — Stale test harness** `server/test_flow_runner.js` exercises the now
-  flag-gated password-reset flow with a dummy secret. Dead code; delete (git keeps it).
+- **S4 · ~~INFO~~ FIXED 2026-07-11** — stale `server/test_flow_runner.js` deleted.
 
 ## 2. Missing structure (ranked)
 
-- **M1 · HIGH — No machine referee.** No CI, no lint, no typecheck. The 41-check smoke
-  suite only runs when someone remembers. Fix: GitHub Actions on push/PR —
-  `npm ci → syntax check → npm test → npm audit --audit-level=high` — plus ESLint.
-- **M2 · HIGH (launch blocker) — No privacy policy or terms pages.** The store collects
-  names and phone numbers; both pages must exist and be linked in the footer before ads.
+- **M1 · ~~HIGH~~ FIXED 2026-07-11** — GitHub Actions CI on every push/PR (install →
+  syntax check → lint → 43 smoke tests → `npm audit --audit-level=high`) plus ESLint
+  (0 errors; legacy patterns surface as warnings without blocking).
+- **M2 · ~~HIGH~~ FIXED 2026-07-11** — `privacy.html` + `terms.html` written for how the
+  store actually works, linked in the footer and sitemap (stale preorder.html entry removed).
 - **M3 · MEDIUM — Backups are manual.** `backup_db.js` works (verified today) but nothing
   schedules it; schedule daily on the host + do one restore drill per quarter.
 - **M4 · MEDIUM — No error alerting.** Telegram alerts cover new orders only; server

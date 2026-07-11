@@ -324,10 +324,22 @@ const authenticateToken = (req, res, next) => {
     // "Unexpected token 'F'" parse error that masked expired sessions.
     if (token == null) return res.status(401).json({ error: 'Authentication required' });
 
-    jwt.verify(token, JWT_SECRET, (err, user) => {
+    jwt.verify(token, JWT_SECRET, (err, payload) => {
         if (err) return res.status(403).json({ error: 'Invalid or expired session' });
-        req.user = user;
-        next();
+        // Re-check the account on every request so deleting, rejecting, or
+        // demoting a staff member takes effect immediately — not when their
+        // 12h token happens to expire. Role comes from the DB, not the token,
+        // so a demoted manager loses manager routes on their next request.
+        // Primary-key lookup: negligible cost at this scale. NULL status =
+        // pre-migration account, treated as active.
+        db.get(`SELECT id, username, role, status FROM users WHERE id = ?`, [payload.id], (e, user) => {
+            if (e) return serverError(res, e);
+            if (!user || (user.status && user.status !== 'active')) {
+                return res.status(403).json({ error: 'This account is no longer active' });
+            }
+            req.user = { id: user.id, username: user.username, role: user.role };
+            next();
+        });
     });
 };
 

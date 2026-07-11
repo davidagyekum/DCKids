@@ -7,7 +7,7 @@
 - **Stack:** vanilla HTML/CSS/JS + Express, no build step (playbook: prototype tier)
 - **Database:** SQLite (WAL) — file-based, gitignored, self-seeding
 - **Handles:** money? no card data (WhatsApp checkout, totals server-side) · personal data? yes (names, phones) · uploads? yes (product images, validated) · realtime? no
-- **Done means:** deployed behind HTTPS with all env vars set, `npm test` green (41 checks), [docs/SHIP-CHECKLIST.md](docs/SHIP-CHECKLIST.md) fully checked
+- **Done means:** deployed behind HTTPS with all env vars set, `npm test` green (43 checks), [docs/SHIP-CHECKLIST.md](docs/SHIP-CHECKLIST.md) fully checked
 - PRD: [docs/PRD.md](docs/PRD.md) — update it when scope changes, before coding.
 
 ## Commands

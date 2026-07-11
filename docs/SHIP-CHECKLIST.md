@@ -11,7 +11,7 @@ Status as of 2026-07-11 (pre-deploy). ✅ verified · ⚠️ partial/needs actio
 - [ ] CORS: code enforces `ALLOWED_ORIGINS` allowlist in production — ⚠️ set the env var at deploy, then verify a cross-origin request fails
 - [x] Upload validation: manager-only, png/jpg/webp whitelist, 5MB cap, server-generated filenames
 - [x] `npm audit`: 0 vulnerabilities (2026-07-11)
-- [ ] Logout: clears client storage; ⚠️ JWTs are stateless — a stolen token stays valid up to 12h. Acceptable for a 2-person team; revisit (token denylist) if staff grows
+- [x] Logout/revocation: every authenticated request re-checks the account in the DB — deleting, rejecting, or demoting a staff member kills their session on their next request (test-proven 2026-07-11)
 - [ ] Staging behind auth — no staging environment yet
 - [ ] securityheaders.com grade — headers are set in code (nosniff, frame, referrer, permissions, HSTS in prod); ⚠️ scan the live domain after deploy
 - [ ] External scan (checkvibe.dev / vibelegit.io) — run against the live domain after deploy
@@ -32,7 +32,7 @@ Status as of 2026-07-11 (pre-deploy). ✅ verified · ⚠️ partial/needs actio
 ## Operations
 - [ ] Error tracking/alerts: Telegram alerts cover new orders only — ❌ no error alerting; at minimum pipe server logs somewhere readable and check them
 - [ ] Dependency-update reminder — ❌ set a monthly reminder to run `npm audit` + `npm update`
-- [x] Smoke tests: `npm test` — 41 end-to-end checks on a throwaway DB, all green (2026-07-11)
+- [x] Smoke tests: `npm test` — 43 end-to-end checks on a throwaway DB, all green (2026-07-11)
 
 ## Unhappy paths (playbook: test deliberately)
 - [x] Empty forms rejected (client + server validation)

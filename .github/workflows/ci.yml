@@ -32,7 +32,7 @@ jobs:
         working-directory: server
         run: npm run lint
 
-      - name: Smoke tests (41 end-to-end checks)
+      - name: Smoke tests
         working-directory: server
         run: npm test
 
