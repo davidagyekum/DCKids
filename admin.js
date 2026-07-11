@@ -754,7 +754,7 @@ function showToast(message, type) {
 
     var toast = document.createElement('div');
     toast.style.cssText = 'display:flex;align-items:center;gap:12px;padding:14px 20px;background:#fff;border-radius:12px;box-shadow:0 10px 40px rgba(0,0,0,0.12);border-left:4px solid ' + colors[type] + ';font-size:14px;font-family:Inter,sans-serif;transform:translateX(120%);transition:transform 0.3s ease;max-width:380px;';
-    toast.innerHTML = '<span style="display:inline-flex;align-items:center;color:' + colors[type] + ';">' + icons[type] + '</span><span style="flex:1;color:#333;">' + message + '</span><button style="background:none;border:none;color:#999;cursor:pointer;font-size:18px;padding:0;line-height:1;" onclick="this.parentElement.remove()">&times;</button>';
+    toast.innerHTML = '<span style="display:inline-flex;align-items:center;color:' + colors[type] + ';">' + icons[type] + '</span><span style="flex:1;color:#333;">' + escapeHtml(message) + '</span><button style="background:none;border:none;color:#999;cursor:pointer;font-size:18px;padding:0;line-height:1;" onclick="this.parentElement.remove()">&times;</button>';
 
     container.appendChild(toast);
 
@@ -2074,7 +2074,7 @@ function handleProductImageUpload(event) {
             if (typeof showToast === 'function') showToast('Image uploaded (' + Math.round(res.bytes/1024) + ' KB)', 'success');
         })
         .catch(function(err) {
-            if (previewEl) previewEl.innerHTML = '<div style="padding:12px;font-size:12px;color:#dc2626;">' + (err.message || 'Upload failed') + '</div>';
+            if (previewEl) previewEl.innerHTML = '<div style="padding:12px;font-size:12px;color:#dc2626;">' + escapeHtml(err.message || 'Upload failed') + '</div>';
             if (typeof showToast === 'function') showToast(err.message || 'Upload failed', 'error');
         });
 }
@@ -8273,7 +8273,7 @@ function loadAdmins() {
     })
     .catch(function(err) {
         if (tbody) {
-            tbody.innerHTML = '<tr><td colspan="4" class="empty-state" style="color:var(--danger)">Error: ' + err.message + '</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="4" class="empty-state" style="color:var(--danger)">Error: ' + escapeHtml(err.message) + '</td></tr>';
         }
     });
 }
