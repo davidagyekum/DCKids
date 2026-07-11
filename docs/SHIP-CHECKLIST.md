@@ -17,7 +17,7 @@ Status as of 2026-07-11 (pre-deploy). ✅ verified · ⚠️ partial/needs actio
 - [ ] External scan (checkvibe.dev / vibelegit.io) — run against the live domain after deploy
 
 ## Completeness
-- [ ] Privacy policy + Terms linked in footer — ❌ REQUIRED BEFORE PUBLIC LAUNCH (collects names + phone numbers)
+- [x] Privacy policy + Terms: `privacy.html` + `terms.html`, linked in the storefront footer and sitemap (2026-07-11)
 - [x] Loading / empty / error states: storefront fallback catalogue, empty-cart/wishlist/search states, admin toasts + empty tables
 - [x] Mobile verified on real devices (owner + external reviewer, July 2026)
 - [ ] SEO: titles/meta/theme-color present — ⚠️ add sitemap.xml + robots.txt and submit to Search Console at launch
