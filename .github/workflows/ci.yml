@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main, dev]
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+
+      - name: Install dependencies
+        working-directory: server
+        run: npm ci
+
+      - name: Syntax check (every shipped JS file)
+        run: |
+          for f in app.js admin.js gradient.js service-worker.js server/server.js server/db.js server/backup_db.js server/test_smoke.js; do
+            node -c "$f"
+          done
+
+      - name: Lint
+        working-directory: server
+        run: npm run lint
+
+      - name: Smoke tests (41 end-to-end checks)
+        working-directory: server
+        run: npm test
+
+      - name: Dependency audit (fail on high severity)
+        working-directory: server
+        run: npm audit --audit-level=high

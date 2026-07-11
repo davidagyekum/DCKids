@@ -721,7 +721,7 @@ function normalizeSizes(raw) {
 }
 function parseSizesJson(raw) {
     if (!raw) return null;
-    try { const arr = JSON.parse(raw); if (Array.isArray(arr) && arr.length) return arr; } catch (e) {}
+    try { const arr = JSON.parse(raw); if (Array.isArray(arr) && arr.length) return arr; } catch (e) { /* malformed sizes JSON → fall back to legacy pricing */ }
     return null;
 }
 

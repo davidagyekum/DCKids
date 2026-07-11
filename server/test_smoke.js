@@ -146,7 +146,7 @@ async function run() {
     // catalogue: managed sizes win, otherwise base price (+0 modifier size).
     const p1 = products.find(p => p.id === 1);
     let managed = null;
-    try { const arr = JSON.parse(p1.sizes); if (Array.isArray(arr) && arr.length) managed = arr; } catch (e) {}
+    try { const arr = JSON.parse(p1.sizes); if (Array.isArray(arr) && arr.length) managed = arr; } catch (e) { /* no managed sizes → base price path */ }
     const sizeLabel = managed ? managed[0].label : '6M';
     const unitRetail = managed ? (managed[0].price != null ? managed[0].price : p1.price) : p1.price;
 

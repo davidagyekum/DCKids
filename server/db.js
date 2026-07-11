@@ -1,6 +1,5 @@
 const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
-const bcrypt = require('bcrypt');
 
 const dbPath = process.env.DB_PATH || path.resolve(__dirname, 'inventory.db');
 const db = new sqlite3.Database(dbPath, (err) => {
