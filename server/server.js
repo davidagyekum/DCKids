@@ -95,6 +95,15 @@ if (IS_PROD && !process.env.RESEND_API_KEY) {
     }
 }
 
+// Unexpected-failure responses: the user gets a generic message; the real error
+// (raw SQLite/driver text) goes to the server log only. Driver messages leak
+// schema details and mean nothing to shoppers. Deliberate 4xx validation
+// messages are unaffected — they're written for users.
+function serverError(res, err) {
+    console.error('[server error]', (err && err.stack) ? err.stack : err);
+    return res.status(500).json({ error: 'Something went wrong. Please try again.' });
+}
+
 // ---------------- Passwordless auth: email (Resend) + code helpers ----------------
 const https = require('https');
 const crypto = require('crypto');
@@ -342,7 +351,7 @@ app.post('/api/admin/register', registerLimiter, (req, res) => {
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(mail) || mail.length > 254) return res.status(400).json({ error: 'Please enter a valid email address' });
 
     db.get(`SELECT COUNT(*) AS c FROM users WHERE status = 'active' AND role = 'manager'`, [], (err, row) => {
-        if (err) return res.status(500).json({ error: err.message });
+        if (err) return serverError(res, err);
         // An email on the allowlist is always an owner. Without an allowlist,
         // fall back to "first sign-up = owner" so a fresh install bootstraps.
         const isOwner = OWNER_EMAILS.length > 0
@@ -359,7 +368,7 @@ app.post('/api/admin/register', registerLimiter, (req, res) => {
                     if (String(e2.message).includes('UNIQUE')) {
                         return res.status(409).json({ error: 'An account with this email already exists' });
                     }
-                    return res.status(500).json({ error: e2.message });
+                    return serverError(res, e2);
                 }
                 const userId = this.lastID;
                 if (isOwner) {
@@ -387,7 +396,7 @@ app.post('/api/auth/request-code', loginLimiter, (req, res) => {
     const mail = String((req.body && req.body.email) || '').trim().toLowerCase();
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(mail)) return res.status(400).json({ error: 'Enter a valid email.' });
     db.get(`SELECT * FROM users WHERE email = ?`, [mail], async (err, user) => {
-        if (err) return res.status(500).json({ error: err.message });
+        if (err) return serverError(res, err);
         // Don't reveal whether an email exists, but be clear on pending/rejected.
         if (!user) return res.json({ success: true, message: 'If that email has access, a code has been sent.' });
         if (user.status === 'pending') return res.status(403).json({ error: 'Your access request is still awaiting approval.' });
@@ -400,7 +409,7 @@ app.post('/api/auth/request-code', loginLimiter, (req, res) => {
         db.run(`DELETE FROM auth_codes WHERE user_id = ?`, [user.id], () => {
             db.run(`INSERT INTO auth_codes (user_id, code_hash, expires_at, attempts) VALUES (?, ?, ?, 0)`,
                 [user.id, codeHash, expiresAt], (e2) => {
-                    if (e2) return res.status(500).json({ error: e2.message });
+                    if (e2) return serverError(res, e2);
                     // Operator-visible in development so the flow is testable
                     // without email (and in Resend test mode, where email only
                     // delivers to your own address). NEVER in production:
@@ -427,7 +436,7 @@ app.post('/api/auth/verify-code', loginLimiter, (req, res) => {
          WHERE u.email = ? ORDER BY c.id DESC LIMIT 1`,
         [mail],
         async (err, row) => {
-            if (err) return res.status(500).json({ error: err.message });
+            if (err) return serverError(res, err);
             if (!row) return res.status(400).json({ error: 'No code found. Request a new one.' });
             if (row.status !== 'active') return res.status(403).json({ error: 'This account is not active.' });
             if (new Date(row.expires_at).getTime() < Date.now()) {
@@ -461,10 +470,10 @@ app.post('/api/auth/recovery', loginLimiter, (req, res) => {
     const rc = String((req.body && req.body.code) || '').trim().toUpperCase().replace(/\s+/g, '');
     if (!mail || !rc) return res.status(400).json({ error: 'Enter your email and a recovery code.' });
     db.get(`SELECT * FROM users WHERE email = ? AND status = 'active'`, [mail], (err, user) => {
-        if (err) return res.status(500).json({ error: err.message });
+        if (err) return serverError(res, err);
         if (!user) return res.status(400).json({ error: 'Invalid email or recovery code.' });
         db.all(`SELECT id, code_hash FROM recovery_codes WHERE user_id = ? AND used_at IS NULL`, [user.id], async (e2, rows) => {
-            if (e2) return res.status(500).json({ error: e2.message });
+            if (e2) return serverError(res, e2);
             for (const r of (rows || [])) {
                 if (await bcrypt.compare(rc, r.code_hash)) {
                     db.run(`UPDATE recovery_codes SET used_at = datetime('now') WHERE id = ?`, [r.id]);
@@ -500,7 +509,7 @@ app.post('/api/auth/google', loginLimiter, async (req, res) => {
     const sub = payload.sub || null;
 
     db.get(`SELECT * FROM users WHERE email = ?`, [mail], async (err, user) => {
-        if (err) return res.status(500).json({ error: err.message });
+        if (err) return serverError(res, err);
 
         if (!user) {
             const isOwner = OWNER_EMAILS.includes(mail);
@@ -511,7 +520,7 @@ app.post('/api/auth/google', loginLimiter, async (req, res) => {
                  VALUES (?, NULL, ?, ?, ?, NULL, ?, ?, datetime('now'))`,
                 [mail, role, mail, name, status, sub],
                 async function (e2) {
-                    if (e2) return res.status(500).json({ error: e2.message });
+                    if (e2) return serverError(res, e2);
                     const userId = this.lastID;
                     if (isOwner) {
                         const recoveryCodes = await generateRecoveryCodes(userId);
@@ -548,7 +557,7 @@ app.get('/api/admin/access-requests', authenticateToken, requireManager, (req, r
         `SELECT id, full_name, email, phone, created_at FROM users WHERE status = 'pending' ORDER BY id DESC`,
         [],
         (err, rows) => {
-            if (err) return res.status(500).json({ error: err.message });
+            if (err) return serverError(res, err);
             res.json(rows);
         }
     );
@@ -560,7 +569,7 @@ app.post('/api/admin/access-requests/:id/approve', authenticateToken, requireMan
         `UPDATE users SET status = 'active', role = ? WHERE id = ? AND status = 'pending'`,
         [role, req.params.id],
         function (err) {
-            if (err) return res.status(500).json({ error: err.message });
+            if (err) return serverError(res, err);
             if (this.changes === 0) return res.status(404).json({ error: 'Request not found or already handled' });
             res.json({ success: true, role });
         }
@@ -572,7 +581,7 @@ app.post('/api/admin/access-requests/:id/reject', authenticateToken, requireMana
         `UPDATE users SET status = 'rejected' WHERE id = ? AND status = 'pending'`,
         [req.params.id],
         function (err) {
-            if (err) return res.status(500).json({ error: err.message });
+            if (err) return serverError(res, err);
             if (this.changes === 0) return res.status(404).json({ error: 'Request not found or already handled' });
             res.json({ success: true });
         }
@@ -588,7 +597,7 @@ app.get('/api/products', (req, res) => {
 
     if (!hasPaging) {
         return db.all(`SELECT * FROM products`, [], (err, rows) => {
-            if (err) return res.status(500).json({ error: err.message });
+            if (err) return serverError(res, err);
             res.json(rows);
         });
     }
@@ -603,9 +612,9 @@ app.get('/api/products', (req, res) => {
     const pageParams = cat ? [cat, limit, offset] : [limit, offset];
 
     db.get(`SELECT COUNT(*) AS total FROM products ${where}`, countParams, (err, countRow) => {
-        if (err) return res.status(500).json({ error: err.message });
+        if (err) return serverError(res, err);
         db.all(`SELECT * FROM products ${where} ORDER BY id DESC LIMIT ? OFFSET ?`, pageParams, (err2, rows) => {
-            if (err2) return res.status(500).json({ error: err2.message });
+            if (err2) return serverError(res, err2);
             const total = (countRow && countRow.total) || 0;
             res.json({ products: rows, total, page, limit, pages: Math.ceil(total / limit) });
         });
@@ -614,7 +623,7 @@ app.get('/api/products', (req, res) => {
 
 app.get('/api/settings', (req, res) => {
     db.get(`SELECT * FROM store_settings WHERE id = 1`, (err, row) => {
-        if (err) return res.status(500).json({ error: err.message });
+        if (err) return serverError(res, err);
         if (!row) {
             // Provide safe defaults if for some reason the db is totally empty
             return res.json({
@@ -646,7 +655,7 @@ app.put('/api/settings', authenticateToken, requireManager, (req, res) => {
          WHERE id = 1`,
         [whatsapp_number, wholesale_enabled ? 1 : 0, wholesale_moq, wholesale_discount, banner_enabled ? 1 : 0, banner_text],
         function(err) {
-            if (err) return res.status(500).json({ error: err.message });
+            if (err) return serverError(res, err);
             res.json({ success: true, message: 'Settings updated successfully' });
         }
     );
@@ -688,7 +697,7 @@ function generateSku(cat, callback) {
 // Preview the next auto-assigned SKU for a category, without reserving it.
 app.get('/api/products/next-sku', authenticateToken, requireManager, (req, res) => {
     generateSku(req.query.cat, (err, sku) => {
-        if (err) return res.status(500).json({ error: err.message });
+        if (err) return serverError(res, err);
         res.json({ sku });
     });
 });
@@ -726,7 +735,7 @@ app.post('/api/products', authenticateToken, requireManager, (req, res) => {
             [name, finalSku || null, size, price, img, cat, stock, badge, description || null, fulfillment_type || 'in_stock', sizesJson],
             function (err) {
                 if (isDuplicateSku(err)) return res.status(409).json({ error: 'That SKU is already in use by another product.' });
-                if (err) return res.status(500).json({ error: err.message });
+                if (err) return serverError(res, err);
                 res.json({ id: this.lastID, sku: finalSku || null });
             }
         );
@@ -736,7 +745,7 @@ app.post('/api/products', authenticateToken, requireManager, (req, res) => {
         insert(String(sku).trim());
     } else {
         generateSku(cat, (err, generated) => {
-            if (err) return res.status(500).json({ error: err.message });
+            if (err) return serverError(res, err);
             insert(generated);
         });
     }
@@ -751,7 +760,7 @@ app.put('/api/products/:id', authenticateToken, requireManager, (req, res) => {
         [name, sku || null, size, price, img, cat, stock, badge, description || null, fulfillment_type || 'in_stock', sizesJson, req.params.id],
         function (err) {
             if (isDuplicateSku(err)) return res.status(409).json({ error: 'That SKU is already in use by another product.' });
-            if (err) return res.status(500).json({ error: err.message });
+            if (err) return serverError(res, err);
             res.json({ changes: this.changes });
         }
     );
@@ -765,13 +774,13 @@ app.put('/api/products/:id', authenticateToken, requireManager, (req, res) => {
 app.delete('/api/products/:id', authenticateToken, requireManager, (req, res) => {
     const productId = req.params.id;
     db.run(`DELETE FROM product_images WHERE product_id = ?`, [productId], (err) => {
-        if (err) return res.status(500).json({ error: err.message });
+        if (err) return serverError(res, err);
         db.run(`DELETE FROM product_reviews WHERE product_id = ?`, [productId], (err2) => {
-            if (err2) return res.status(500).json({ error: err2.message });
+            if (err2) return serverError(res, err2);
             db.run(`DELETE FROM wishlist_items WHERE product_id = ?`, [productId], (err3) => {
-                if (err3) return res.status(500).json({ error: err3.message });
+                if (err3) return serverError(res, err3);
                 db.run(`DELETE FROM products WHERE id = ?`, [productId], function (err4) {
-                    if (err4) return res.status(500).json({ error: err4.message });
+                    if (err4) return serverError(res, err4);
                     res.json({ changes: this.changes });
                 });
             });
@@ -786,7 +795,7 @@ app.put('/api/products/:id/deduct', authenticateToken, (req, res) => {
     
     // Strict Backend Validation: Check current stock first
     db.get(`SELECT stock FROM products WHERE id = ?`, [productId], (err, row) => {
-        if (err) return res.status(500).json({ error: err.message });
+        if (err) return serverError(res, err);
         if (!row) return res.status(404).json({ error: 'Product not found' });
         
         if (row.stock <= 0) {
@@ -798,7 +807,7 @@ app.put('/api/products/:id/deduct', authenticateToken, (req, res) => {
             `UPDATE products SET stock = stock - 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
             [productId],
             function (err) {
-                if (err) return res.status(500).json({ error: err.message });
+                if (err) return serverError(res, err);
                 
                 // Log the transaction
                 db.run(
@@ -818,7 +827,7 @@ app.put('/api/products/:id/deduct', authenticateToken, (req, res) => {
 // ---------------- SUPPLIER ROUTES ---------------- //
 app.get('/api/suppliers', authenticateToken, (req, res) => {
     db.all(`SELECT * FROM suppliers ORDER BY created_at DESC`, (err, suppliers) => {
-        if (err) return res.status(500).json({ error: err.message });
+        if (err) return serverError(res, err);
         res.json(suppliers);
     });
 });
@@ -860,11 +869,11 @@ app.post('/api/suppliers', authenticateToken, requireManager, (req, res) => {
                 if (err.message && err.message.indexOf('UNIQUE') >= 0) {
                     return res.status(409).json({ error: 'A supplier with this name already exists.' });
                 }
-                return res.status(500).json({ error: err.message });
+                return serverError(res, err);
             }
 
             db.get(`SELECT * FROM suppliers WHERE id = ?`, [this.lastID], (err, supplier) => {
-                if (err) return res.status(500).json({ error: err.message });
+                if (err) return serverError(res, err);
                 res.status(201).json(supplier);
             });
         }
@@ -910,12 +919,12 @@ app.put('/api/suppliers/:id', authenticateToken, requireManager, (req, res) => {
                 if (err.message && err.message.indexOf('UNIQUE') >= 0) {
                     return res.status(409).json({ error: 'A supplier with this name already exists.' });
                 }
-                return res.status(500).json({ error: err.message });
+                return serverError(res, err);
             }
             if (this.changes === 0) return res.status(404).json({ error: 'Supplier not found.' });
 
             db.get(`SELECT * FROM suppliers WHERE id = ?`, [req.params.id], (err, supplier) => {
-                if (err) return res.status(500).json({ error: err.message });
+                if (err) return serverError(res, err);
                 res.json(supplier);
             });
         }
@@ -926,7 +935,7 @@ app.put('/api/suppliers/:id', authenticateToken, requireManager, (req, res) => {
 // List all users
 app.get('/api/users', authenticateToken, requireManager, (req, res) => {
     db.all(`SELECT id, username, role, email, full_name, phone, status FROM users`, [], (err, rows) => {
-        if (err) return res.status(500).json({ error: err.message });
+        if (err) return serverError(res, err);
         res.json(rows);
     });
 });
@@ -955,7 +964,7 @@ app.post('/api/users', authenticateToken, requireManager, (req, res) => {
                 if (err.message && err.message.indexOf('UNIQUE') >= 0) {
                     return res.status(409).json({ error: 'An account with this email already exists' });
                 }
-                return res.status(500).json({ error: err.message });
+                return serverError(res, err);
             }
             sendEmail(mail, 'You now have DC Kids admin access',
                 `<p>Hi ${escapeHtmlServer(name)}, you've been given ${finalRole} access to the DC Kids dashboard.</p>
@@ -977,11 +986,11 @@ app.delete('/api/users/:id', authenticateToken, requireManager, (req, res) => {
     }
 
     db.run(`DELETE FROM auth_codes WHERE user_id = ?`, [userId], (err) => {
-        if (err) return res.status(500).json({ error: err.message });
+        if (err) return serverError(res, err);
         db.run(`DELETE FROM recovery_codes WHERE user_id = ?`, [userId], (err2) => {
-            if (err2) return res.status(500).json({ error: err2.message });
+            if (err2) return serverError(res, err2);
             db.run(`DELETE FROM users WHERE id = ?`, [userId], function (err3) {
-                if (err3) return res.status(500).json({ error: err3.message });
+                if (err3) return serverError(res, err3);
                 if (this.changes === 0) return res.status(404).json({ error: 'User not found' });
                 res.json({ success: true, message: 'User deleted successfully' });
             });
@@ -1033,7 +1042,7 @@ app.post('/api/orders', (req, res) => {
     
     // 1. Fetch store settings for wholesale math
     db.get(`SELECT * FROM store_settings WHERE id = 1`, (err, settings) => {
-        if (err) return res.status(500).json({ error: err.message });
+        if (err) return serverError(res, err);
         
         const moq = settings ? settings.wholesale_moq : 10;
         const discount = settings ? settings.wholesale_discount : 0;
@@ -1109,7 +1118,7 @@ app.post('/api/orders', (req, res) => {
                     `INSERT INTO orders (order_number, customer_name, customer_phone, order_type, total_amount, status, delivery_area, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
                     [tempNumber, customer_name, customer_phone, order_type, total_amount, initialStatus, delivery_area || null, notes || null],
                     function(err) {
-                        if (err) return res.status(500).json({ error: err.message });
+                        if (err) return serverError(res, err);
 
                         const order_id = this.lastID;
                         const order_number = 'ORD-' + String(10000 + order_id);
@@ -1148,7 +1157,11 @@ app.post('/api/orders', (req, res) => {
                 );
             })
             .catch(err => {
-                res.status(err.status || 500).json({ error: err.message });
+                // err.status marks a deliberate validation failure (MOQ floor,
+                // unknown product) whose message is written for the shopper;
+                // anything else is unexpected and stays generic.
+                if (err.status) return res.status(err.status).json({ error: err.message });
+                serverError(res, err);
             });
     });
 });
@@ -1169,14 +1182,14 @@ app.get('/api/orders', authenticateToken, (req, res) => {
     }
 
     db.all(sql, params, (err, orders) => {
-        if (err) return res.status(500).json({ error: err.message });
+        if (err) return serverError(res, err);
         if (!orders.length) return res.json([]);
 
         // Single batched query for all items instead of one query per order (N+1).
         const ids = orders.map(o => o.id);
         const placeholders = ids.map(() => '?').join(',');
         db.all(`SELECT * FROM order_items WHERE order_id IN (${placeholders})`, ids, (err2, allItems) => {
-            if (err2) return res.status(500).json({ error: err2.message });
+            if (err2) return serverError(res, err2);
             const byOrder = {};
             (allItems || []).forEach(it => {
                 (byOrder[it.order_id] = byOrder[it.order_id] || []).push(it);
@@ -1193,12 +1206,12 @@ app.get('/api/orders/:id/item-preview', authenticateToken, (req, res) => {
     
     // Fetch the order
     db.get(`SELECT * FROM orders WHERE id = ?`, [orderId], (err, order) => {
-        if (err) return res.status(500).json({ error: err.message });
+        if (err) return serverError(res, err);
         if (!order) return res.status(404).json({ error: 'Order not found' });
         
         // Fetch order items
         db.all(`SELECT * FROM order_items WHERE order_id = ?`, [orderId], (err, items) => {
-            if (err) return res.status(500).json({ error: err.message });
+            if (err) return serverError(res, err);
             if (!items || items.length === 0) return res.status(404).json({ error: 'No items in this order' });
             
             // Get the first item (primary ordered item to preview)
@@ -1206,7 +1219,7 @@ app.get('/api/orders/:id/item-preview', authenticateToken, (req, res) => {
             
             // Fetch product details
             db.get(`SELECT * FROM products WHERE id = ?`, [primaryItem.product_id], (err, product) => {
-                if (err) return res.status(500).json({ error: err.message });
+                if (err) return serverError(res, err);
                 
                 // Fallback details if product doesn't exist anymore
                 const pName = product ? product.name : primaryItem.product_name;
@@ -1291,14 +1304,14 @@ app.put('/api/orders/:id', authenticateToken, (req, res) => {
     }
 
     db.get(`SELECT status FROM orders WHERE id = ?`, [orderId], (err, order) => {
-        if (err) return res.status(500).json({ error: err.message });
+        if (err) return serverError(res, err);
         if (!order) return res.status(404).json({ error: 'Order not found' });
 
         db.run(
             `UPDATE orders SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
             [normStatus, orderId],
             function (err) {
-                if (err) return res.status(500).json({ error: err.message });
+                if (err) return serverError(res, err);
 
                 // If transitioning to paid, deduct stock
                 if (normStatus === 'paid' && order.status !== 'paid') {
@@ -1320,14 +1333,14 @@ app.put('/api/orders/:id', authenticateToken, (req, res) => {
 app.delete('/api/orders/:id', authenticateToken, (req, res) => {
     const orderId = req.params.id;
     db.get(`SELECT id FROM orders WHERE id = ?`, [orderId], (err, order) => {
-        if (err) return res.status(500).json({ error: err.message });
+        if (err) return serverError(res, err);
         if (!order) return res.status(404).json({ error: 'Order not found' });
         // Remove child rows first, then the order
         db.run(`DELETE FROM order_items WHERE order_id = ?`, [orderId], (err) => {
-            if (err) return res.status(500).json({ error: err.message });
+            if (err) return serverError(res, err);
             db.run(`DELETE FROM payments WHERE order_id = ?`, [orderId], () => {
                 db.run(`DELETE FROM orders WHERE id = ?`, [orderId], function(err) {
-                    if (err) return res.status(500).json({ error: err.message });
+                    if (err) return serverError(res, err);
                     res.json({ success: true, deleted: orderId });
                 });
             });
@@ -1635,7 +1648,7 @@ app.get('/api/analytics/sales', authenticateToken, async (req, res) => {
         const analytics = await buildSalesAnalytics(req.query);
         res.json(analytics);
     } catch (err) {
-        res.status(500).json({ error: err.message });
+        serverError(res, err);
     }
 });
 
@@ -1665,7 +1678,7 @@ app.get('/api/analytics/sales/export', authenticateToken, async (req, res) => {
         res.setHeader('Content-Disposition', 'attachment; filename="dc-kids-sales-analytics.csv"');
         res.send(csv);
     } catch (err) {
-        res.status(500).json({ error: err.message });
+        serverError(res, err);
     }
 });
 
@@ -1708,21 +1721,21 @@ app.post('/api/customer/register', requireCustomerAccountsEnabled, registerLimit
             function(err) {
                 if (err) {
                     if (String(err.message).includes('UNIQUE')) return res.status(409).json({ error: 'An account with that email already exists' });
-                    return res.status(500).json({ error: err.message });
+                    return serverError(res, err);
                 }
                 const cid = this.lastID;
                 const token = jwt.sign({ cid, email: email.toLowerCase(), kind: 'customer' }, JWT_SECRET, { expiresIn: '30d' });
                 res.json({ success: true, token, customer: { id: cid, name, email: email.toLowerCase(), phone: phone || null } });
             }
         );
-    } catch (e) { res.status(500).json({ error: e.message }); }
+    } catch (e) { serverError(res, e); }
 });
 
 app.post('/api/customer/login', requireCustomerAccountsEnabled, loginLimiter, (req, res) => {
     const { email, password } = req.body || {};
     if (!email || !password) return res.status(400).json({ error: 'Email and password required' });
     db.get(`SELECT * FROM customer_accounts WHERE email = ?`, [email.trim().toLowerCase()], async (err, row) => {
-        if (err) return res.status(500).json({ error: err.message });
+        if (err) return serverError(res, err);
         if (!row) return res.status(401).json({ error: 'Invalid email or password' });
         const ok = await bcrypt.compare(password, row.password_hash);
         if (!ok) return res.status(401).json({ error: 'Invalid email or password' });
@@ -1738,7 +1751,7 @@ app.post('/api/customer/forgot-password', requireCustomerAccountsEnabled, regist
     if (!email) return res.status(400).json({ error: 'Email address is required' });
     
     db.get(`SELECT name FROM customer_accounts WHERE email = ?`, [email.trim().toLowerCase()], (err, user) => {
-        if (err) return res.status(500).json({ error: err.message });
+        if (err) return serverError(res, err);
         
         // Return generic success even if user not found to prevent email scanning/enumeration
         if (!user) {
@@ -1786,21 +1799,21 @@ app.post('/api/customer/reset-password', requireCustomerAccountsEnabled, registe
                 `UPDATE customer_accounts SET password_hash = ? WHERE email = ?`,
                 [hash, email.trim().toLowerCase()],
                 function(err) {
-                    if (err) return res.status(500).json({ error: err.message });
+                    if (err) return serverError(res, err);
                     if (this.changes === 0) return res.status(404).json({ error: 'Account not found' });
                     
                     res.json({ success: true, message: 'Password has been reset successfully. You can now log in.' });
                 }
             );
         } catch (e) {
-            res.status(500).json({ error: e.message });
+            serverError(res, e);
         }
     });
 });
 
 app.get('/api/customer/me', authenticateCustomer, (req, res) => {
     db.get(`SELECT id, email, phone, name, created_at, last_login_at FROM customer_accounts WHERE id = ?`, [req.customer.cid], (err, row) => {
-        if (err) return res.status(500).json({ error: err.message });
+        if (err) return serverError(res, err);
         if (!row) return res.status(404).json({ error: 'Account not found' });
         res.json(row);
     });
@@ -1811,7 +1824,7 @@ app.put('/api/customer/me', authenticateCustomer, (req, res) => {
     db.run(`UPDATE customer_accounts SET name = COALESCE(?, name), phone = COALESCE(?, phone) WHERE id = ?`,
         [name || null, phone || null, req.customer.cid],
         function(err) {
-            if (err) return res.status(500).json({ error: err.message });
+            if (err) return serverError(res, err);
             res.json({ success: true });
         }
     );
@@ -1820,11 +1833,11 @@ app.put('/api/customer/me', authenticateCustomer, (req, res) => {
 // Customer's own order history (matched by phone OR by explicit links)
 app.get('/api/customer/orders', authenticateCustomer, (req, res) => {
     db.get(`SELECT phone FROM customer_accounts WHERE id = ?`, [req.customer.cid], (err, acct) => {
-        if (err) return res.status(500).json({ error: err.message });
+        if (err) return serverError(res, err);
         const phone = acct && acct.phone ? acct.phone : null;
         if (!phone) return res.json([]);
         db.all(`SELECT * FROM orders WHERE customer_phone = ? ORDER BY created_at DESC`, [phone], (err, rows) => {
-            if (err) return res.status(500).json({ error: err.message });
+            if (err) return serverError(res, err);
             res.json(rows || []);
         });
     });
@@ -1833,7 +1846,7 @@ app.get('/api/customer/orders', authenticateCustomer, (req, res) => {
 // ---- Customer addresses ----
 app.get('/api/customer/addresses', authenticateCustomer, (req, res) => {
     db.all(`SELECT * FROM customer_addresses WHERE customer_id = ? ORDER BY is_default DESC, created_at DESC`, [req.customer.cid], (err, rows) => {
-        if (err) return res.status(500).json({ error: err.message });
+        if (err) return serverError(res, err);
         res.json(rows || []);
     });
 });
@@ -1847,7 +1860,7 @@ app.post('/api/customer/addresses', authenticateCustomer, (req, res) => {
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [req.customer.cid, a.label || 'Home', a.recipient_name || null, a.phone || null, a.address_line1, a.address_line2 || null, a.city || null, a.region || null, a.country || 'Ghana', setDefault],
             function(err) {
-                if (err) return res.status(500).json({ error: err.message });
+                if (err) return serverError(res, err);
                 res.json({ success: true, id: this.lastID });
             }
         );
@@ -1867,7 +1880,7 @@ app.put('/api/customer/addresses/:id', authenticateCustomer, (req, res) => {
              WHERE id = ? AND customer_id = ?`,
             [a.label || null, a.recipient_name || null, a.phone || null, a.address_line1 || null, a.address_line2 || null, a.city || null, a.region || null, a.country || null, setDefault, id, req.customer.cid],
             function(err) {
-                if (err) return res.status(500).json({ error: err.message });
+                if (err) return serverError(res, err);
                 if (this.changes === 0) return res.status(404).json({ error: 'Address not found' });
                 res.json({ success: true });
             }
@@ -1878,7 +1891,7 @@ app.put('/api/customer/addresses/:id', authenticateCustomer, (req, res) => {
 });
 app.delete('/api/customer/addresses/:id', authenticateCustomer, (req, res) => {
     db.run(`DELETE FROM customer_addresses WHERE id = ? AND customer_id = ?`, [req.params.id, req.customer.cid], function(err) {
-        if (err) return res.status(500).json({ error: err.message });
+        if (err) return serverError(res, err);
         if (this.changes === 0) return res.status(404).json({ error: 'Address not found' });
         res.json({ success: true });
     });
@@ -1894,13 +1907,13 @@ app.post('/api/orders/track', trackLimiter, (req, res) => {
     if (last4.length < 4) return res.status(400).json({ error: 'Phone must contain at least 4 digits' });
 
     db.get(`SELECT * FROM orders WHERE order_number = ?`, [String(order_number).trim().toUpperCase()], (err, order) => {
-        if (err) return res.status(500).json({ error: err.message });
+        if (err) return serverError(res, err);
         if (!order) return res.status(404).json({ error: 'No order found with that reference' });
         const onFile = String(order.customer_phone || '').replace(/\D/g, '').slice(-4);
         if (onFile !== last4) return res.status(403).json({ error: 'Phone does not match this order' });
 
         db.all(`SELECT * FROM order_items WHERE order_id = ?`, [order.id], (err, items) => {
-            if (err) return res.status(500).json({ error: err.message });
+            if (err) return serverError(res, err);
             res.json({
                 order_number: order.order_number,
                 status: order.status,
@@ -1924,7 +1937,7 @@ app.get('/api/products/:id/reviews', (req, res) => {
          FROM product_reviews WHERE product_id = ? AND status = 'approved' ORDER BY created_at DESC`,
         [req.params.id],
         (err, rows) => {
-            if (err) return res.status(500).json({ error: err.message });
+            if (err) return serverError(res, err);
             const total = rows.length;
             const avg = total ? (rows.reduce((s, r) => s + r.rating, 0) / total) : 0;
             res.json({ summary: { count: total, average: Math.round(avg * 10) / 10 }, reviews: rows });
@@ -1945,7 +1958,7 @@ app.get('/api/products/reviews-summary', (req, res) => {
          GROUP BY product_id`,
         ids,
         (err, rows) => {
-            if (err) return res.status(500).json({ error: err.message });
+            if (err) return serverError(res, err);
             const summaries = {};
             ids.forEach(id => { summaries[id] = { count: 0, average: 0 }; });
             rows.forEach(r => { summaries[r.product_id] = { count: r.count, average: Math.round(r.average * 10) / 10 }; });
@@ -1987,7 +2000,7 @@ app.post('/api/products/:id/reviews', reviewLimiter, (req, res) => {
             `INSERT INTO product_reviews (product_id, customer_id, author_name, rating, title, body) VALUES (?, ?, ?, ?, ?, ?)`,
             [productId, customer_id, resolvedAuthor, r, title || null, String(body).trim()],
             function(err) {
-                if (err) return res.status(500).json({ error: err.message });
+                if (err) return serverError(res, err);
                 res.json({ success: true, id: this.lastID });
             }
         );
@@ -1999,13 +2012,13 @@ app.get('/api/admin/reviews', authenticateToken, requireManager, (req, res) => {
     db.all(`SELECT pr.*, p.name AS product_name FROM product_reviews pr
             LEFT JOIN products p ON p.id = pr.product_id
             ORDER BY pr.created_at DESC LIMIT 200`, (err, rows) => {
-        if (err) return res.status(500).json({ error: err.message });
+        if (err) return serverError(res, err);
         res.json(rows || []);
     });
 });
 app.delete('/api/admin/reviews/:id', authenticateToken, requireManager, (req, res) => {
     db.run(`DELETE FROM product_reviews WHERE id = ?`, [req.params.id], function(err) {
-        if (err) return res.status(500).json({ error: err.message });
+        if (err) return serverError(res, err);
         res.json({ success: true });
     });
 });
@@ -2019,7 +2032,7 @@ app.get('/api/wishlist', authenticateCustomer, (req, res) => {
          JOIN products p ON p.id = w.product_id WHERE w.customer_id = ? ORDER BY w.created_at DESC`,
         [req.customer.cid],
         (err, rows) => {
-            if (err) return res.status(500).json({ error: err.message });
+            if (err) return serverError(res, err);
             res.json(rows || []);
         }
     );
@@ -2028,13 +2041,13 @@ app.post('/api/wishlist', authenticateCustomer, (req, res) => {
     const { product_id } = req.body || {};
     if (!product_id) return res.status(400).json({ error: 'product_id required' });
     db.run(`INSERT OR IGNORE INTO wishlist_items (customer_id, product_id) VALUES (?, ?)`, [req.customer.cid, product_id], function(err) {
-        if (err) return res.status(500).json({ error: err.message });
+        if (err) return serverError(res, err);
         res.json({ success: true, added: this.changes > 0 });
     });
 });
 app.delete('/api/wishlist/:productId', authenticateCustomer, (req, res) => {
     db.run(`DELETE FROM wishlist_items WHERE customer_id = ? AND product_id = ?`, [req.customer.cid, req.params.productId], function(err) {
-        if (err) return res.status(500).json({ error: err.message });
+        if (err) return serverError(res, err);
         res.json({ success: true });
     });
 });
@@ -2063,7 +2076,7 @@ app.put('/api/users/:id', authenticateToken, requireManager, (req, res) => {
     db.run(`UPDATE users SET ${updates.join(', ')} WHERE id = ?`, values, function(err) {
         if (err) {
             if (String(err.message).includes('UNIQUE')) return res.status(409).json({ error: 'That email is already in use' });
-            return res.status(500).json({ error: err.message });
+            return serverError(res, err);
         }
         if (this.changes === 0) return res.status(404).json({ error: 'User not found' });
         res.json({ success: true });
@@ -2145,13 +2158,13 @@ app.post('/api/products/bulk-delete', authenticateToken, requireManager, (req, r
     const placeholders = ids.map(() => '?').join(',');
     // Same FK constraint as the single-delete route — clear dependent rows first.
     db.run(`DELETE FROM product_images WHERE product_id IN (${placeholders})`, ids, (err) => {
-        if (err) return res.status(500).json({ error: err.message });
+        if (err) return serverError(res, err);
         db.run(`DELETE FROM product_reviews WHERE product_id IN (${placeholders})`, ids, (err2) => {
-            if (err2) return res.status(500).json({ error: err2.message });
+            if (err2) return serverError(res, err2);
             db.run(`DELETE FROM wishlist_items WHERE product_id IN (${placeholders})`, ids, (err3) => {
-                if (err3) return res.status(500).json({ error: err3.message });
+                if (err3) return serverError(res, err3);
                 db.run(`DELETE FROM products WHERE id IN (${placeholders})`, ids, function(err4) {
-                    if (err4) return res.status(500).json({ error: err4.message });
+                    if (err4) return serverError(res, err4);
                     res.json({ success: true, deleted: this.changes });
                 });
             });
@@ -2170,7 +2183,7 @@ app.post('/api/products/bulk-update', authenticateToken, requireManager, (req, r
     if (updates.length === 0) return res.status(400).json({ error: 'No allowed fields supplied' });
     const placeholders = ids.map(() => '?').join(',');
     db.run(`UPDATE products SET ${updates.join(', ')} WHERE id IN (${placeholders})`, [...values, ...ids], function(err) {
-        if (err) return res.status(500).json({ error: err.message });
+        if (err) return serverError(res, err);
         res.json({ success: true, updated: this.changes });
     });
 });
@@ -2210,7 +2223,7 @@ app.post('/api/products/bulk-import', authenticateToken, requireManager, (req, r
     const processRow = (idx) => {
         if (idx >= validRows.length) {
             return stmt.finalize((err) => {
-                if (err) return res.status(500).json({ error: err.message });
+                if (err) return serverError(res, err);
                 res.json({ success: true, inserted, skipped, failed: failures.length, errors: failures.slice(0, 10) });
             });
         }
@@ -2271,7 +2284,7 @@ app.post('/api/upload-image', authenticateToken, requireManager, (req, res) => {
         fs.writeFileSync(path.join(imagesDir, fname), buf);
         res.json({ success: true, path: 'images/' + fname, bytes: buf.length });
     } catch (e) {
-        res.status(500).json({ error: e.message });
+        serverError(res, e);
     }
 });
 

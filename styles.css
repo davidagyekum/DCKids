@@ -1539,8 +1539,11 @@ input:focus-visible {
    floating bottom nav / Install-app button from covering the last row. */
 @media (max-width: 640px) {
   body .product-grid { width: 100% !important; }
+  /* Clear side gutters on the far left/right so cards don't touch the edges. */
+  .product-grid { padding-left: 20px; padding-right: 20px; }
   #dynamicSections, #preorderSection { padding-bottom: 84px; }
   .product-card__rating { flex-wrap: wrap; }
+  .product-card__cta { min-height: 42px; }
 }
 
 /* Size/bulk-qty dropdown: on a narrow card the open list crowds out the cards

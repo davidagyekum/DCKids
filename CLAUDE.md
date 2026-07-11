@@ -1,5 +1,15 @@
 # DC Kids Brand — Project Instructions
 
+## Project identity (Vibe Coder's Playbook)
+- **System type:** e-commerce (storefront + admin dashboard + REST API)
+- **Core user action:** parents browse the kids' catalogue and place retail/wholesale/pre-orders that complete over WhatsApp
+- **Stage:** MVP → first users (pre-launch, external reviewer testing)
+- **Stack:** vanilla HTML/CSS/JS + Express, no build step (playbook: prototype tier)
+- **Database:** SQLite (WAL) — file-based, gitignored, self-seeding
+- **Handles:** money? no card data (WhatsApp checkout, totals server-side) · personal data? yes (names, phones) · uploads? yes (product images, validated) · realtime? no
+- **Done means:** deployed behind HTTPS with all env vars set, `npm test` green (41 checks), [docs/SHIP-CHECKLIST.md](docs/SHIP-CHECKLIST.md) fully checked
+- PRD: [docs/PRD.md](docs/PRD.md) — update it when scope changes, before coding.
+
 ## Commands
 
 ### Server (Backend)
