@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#0F4C3A">
+  <title>Payment status — DC Kids Brand</title>
+  <link rel="icon" href="icon.png">
+  <link rel="stylesheet" href="styles.css?v=132">
+</head>
+<body class="payment-result-page">
+  <header class="payment-result-header">
+    <a href="/index.html" aria-label="DC Kids Brand home"><img src="icon.png" alt="DC Kids Brand"></a>
+    <a href="/account.html">My account</a>
+  </header>
+  <main class="payment-result-main">
+    <section class="payment-result-card" aria-live="polite">
+      <div class="payment-result-icon" id="paymentResultIcon" aria-hidden="true">
+        <span class="payment-result-spinner"></span>
+      </div>
+      <p class="payment-result-label">DC Kids secure checkout</p>
+      <h1 id="paymentResultTitle">Confirming your payment</h1>
+      <p id="paymentResultMessage">Please keep this page open while we confirm the transaction securely with Paystack.</p>
+      <dl class="payment-result-details" id="paymentResultDetails" hidden>
+        <div><dt>Order</dt><dd id="paymentResultOrder">—</dd></div>
+        <div><dt>Status</dt><dd id="paymentResultStatus">—</dd></div>
+      </dl>
+      <div class="payment-result-actions">
+        <a class="payment-result-primary" href="/index.html">Return to shop</a>
+        <a class="payment-result-secondary" href="/account.html">View my account</a>
+      </div>
+      <p class="payment-result-delivery">Product payment does not include delivery. DC Kids will contact you to confirm the delivery charge.</p>
+    </section>
+  </main>
+  <script src="payment-result.js?v=1"></script>
+</body>
+</html>

@@ -47,14 +47,8 @@
       .admin-header { padding: 0 12px !important; }
     }
   </style>
-    <script src="https://cdn.tailwindcss.com"></script>
-  <script>
-    tailwind.config = {
-      corePlugins: {
-        preflight: false,
-      }
-    }
-  </script>
+  <!-- Locally compiled Tailwind utilities; preflight stays disabled for admin.css. -->
+  <link rel="stylesheet" href="tailwind-admin.css?v=1">
   <style>
     /* ── Force light mode on the login page regardless of OS/browser dark preference.
        Dark mode is an admin-dashboard-only preference; the login screen is always light. ── */
@@ -1037,7 +1031,10 @@
             <h1 class="page-title">Product Management</h1>
             <p class="page-subtitle">Add, edit, and manage your products</p>
           </div>
-          <div style="display:flex; gap:10px;">
+          <div style="display:flex; gap:10px; flex-wrap:wrap;">
+            <button class="btn btn-outline" type="button" onclick="openImageHealthModal()">Image health</button>
+            <button class="btn btn-outline" type="button" onclick="openBulkImageModal()">Bulk photos</button>
+            <button class="btn btn-outline" type="button" onclick="exportProductCatalogueCSV()">Export CSV</button>
             <button class="btn btn-outline" type="button" onclick="openProductImportModal()" style="display:inline-flex; align-items:center; gap:6px;">
               <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
               Import CSV
@@ -1094,6 +1091,13 @@
               <div class="stat-number" id="prod-stat-out">2</div>
             </div>
           </div>
+
+          <button type="button" class="stat-card" onclick="document.getElementById('prod-image-filter').value='missing'; renderProductsGrid();" style="text-align:left;cursor:pointer;">
+            <div class="stat-icon pink">
+              <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"></rect><path d="m3 16 5-5 4 4 3-3 6 6"></path></svg>
+            </div>
+            <div class="stat-content"><div class="stat-label">Missing Real Photos</div><div class="stat-number" id="prod-stat-missing">0</div></div>
+          </button>
         </div>
 
         <!-- Filter Bar -->
@@ -1115,6 +1119,11 @@
             <option value="in-stock">In Stock</option>
             <option value="low-stock">Low Stock</option>
             <option value="out-of-stock">Out of Stock</option>
+          </select>
+          <select id="prod-image-filter" class="filter-select" aria-label="Filter products by image status">
+            <option value="">All Images</option>
+            <option value="real">Real Photos</option>
+            <option value="missing">Category Artwork / Missing Photo</option>
           </select>
           <select id="prod-fulfillment-filter" class="filter-select" aria-label="Filter products by listing type">
             <option value="">All Listings</option>
@@ -1223,7 +1232,7 @@
               <tr>
                 <td>
                   <div class="table-product">
-                    <img src="images/product_1.jpg" alt="Party Dress" onerror="this.src='https://ui-avatars.com/api/?name=Party%20Dress&background=f3f4f6'">
+                    <img src="images/placeholder.svg" alt="Party Dress" onerror="this.src='https://ui-avatars.com/api/?name=Party%20Dress&background=f3f4f6'">
                     <div class="table-product-info">
                       <h4 onclick="openEditModal(1)">Party Dress</h4>
                       <p>Size: 2Y - 8Y</p>
@@ -4009,6 +4018,9 @@
           <select id="order-status-filter" class="filter-select" aria-label="Filter orders by status">
             <option value="">All Status</option>
             <option value="pending">Pending</option>
+            <option value="awaiting_payment">Awaiting payment</option>
+            <option value="payment_review">Payment review</option>
+            <option value="paid">Paid</option>
             <option value="processing">Processing</option>
             <option value="delivered">Delivered</option>
             <option value="cancelled">Cancelled</option>
@@ -5061,6 +5073,34 @@
     </div>
   </div>
 
+
+  <!-- ==================== MODAL: BULK PRODUCT IMAGES ==================== -->
+  <div id="modal-bulk-images" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="modal-bulk-images-title" style="display:none;">
+    <div class="modal-content" style="max-width:760px;">
+      <div class="modal-header"><h2 id="modal-bulk-images-title" class="modal-title">Bulk product photos</h2><button class="modal-close-btn" type="button" aria-label="Close" onclick="closeBulkImageModal()">&times;</button></div>
+      <div class="modal-body">
+        <div class="bulk-image-drop">
+          <strong>Select JPG, PNG, or WebP files</strong>
+          <p style="font-size:13px;color:#666;margin:6px 0 12px;">Name each file with its SKU (for example CLO-0001.jpg) or product-&lt;id&gt;.jpg.</p>
+          <input id="bulk-image-files" type="file" accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp" multiple onchange="previewBulkImageFiles(this.files)">
+        </div>
+        <div id="bulk-image-summary" class="bulk-image-summary" style="display:none;"></div>
+        <div id="bulk-image-list" class="bulk-image-list"></div>
+        <div id="bulk-image-status" style="margin-top:12px;font-size:13px;" role="status" aria-live="polite"></div>
+      </div>
+      <div class="modal-footer"><button type="button" class="btn btn-outline" onclick="closeBulkImageModal()">Close</button><button type="button" id="bulk-image-retry" class="btn btn-outline" onclick="retryFailedBulkImages()" style="display:none;">Retry failed</button><button type="button" id="bulk-image-upload" class="btn btn-primary" onclick="startBulkImageUpload()" disabled>Upload matched photos</button></div>
+    </div>
+  </div>
+
+  <!-- ==================== MODAL: IMAGE HEALTH ==================== -->
+  <div id="modal-image-health" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="modal-image-health-title" style="display:none;">
+    <div class="modal-content" style="max-width:720px;">
+      <div class="modal-header"><h2 id="modal-image-health-title" class="modal-title">Catalogue image health</h2><button class="modal-close-btn" type="button" aria-label="Close" onclick="closeImageHealthModal()">&times;</button></div>
+      <div class="modal-body"><div id="image-health-content">Loading report?</div></div>
+      <div class="modal-footer"><button type="button" class="btn btn-outline" onclick="closeImageHealthModal()">Close</button><button type="button" class="btn btn-primary" onclick="loadImageHealthReport()">Refresh</button></div>
+    </div>
+  </div>
+
   <!-- ==================== MODAL: PRODUCT CSV IMPORT ==================== -->
   <div id="modal-product-import" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="modal-product-import-title" style="display:none;">
     <div class="modal-content" style="max-width:560px;">
@@ -5120,7 +5160,7 @@
       <div class="p-6 md:p-8 overflow-y-auto flex-1">
         <form class="grid grid-cols-1 lg:grid-cols-12 gap-8 lg:gap-12" id="add-product-form" onsubmit="return false;">
           <!-- Hidden inputs for database mapping -->
-          <input type="hidden" id="add-product-img-src" value="images/product_1.jpg">
+          <input type="hidden" id="add-product-img-src" value="images/placeholder.svg">
           <input type="file" id="add-product-img-input" style="display: none;" accept="image/*">
           <input type="file" id="add-product-img-camera" style="display: none;" accept="image/*" capture="environment">
 
@@ -5361,6 +5401,9 @@
           <label for="modal-order-status">Status</label>
           <select id="modal-order-status" class="form-input" aria-label="Order status">
             <option value="pending">Pending</option>
+            <option value="awaiting_payment">Awaiting payment</option>
+            <option value="payment_review">Payment review</option>
+            <option value="paid">Paid</option>
             <option value="processing">Processing</option>
             <option value="delivered">Delivered</option>
             <option value="cancelled">Cancelled</option>
@@ -6137,7 +6180,8 @@
 
   <!-- Scripts -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-  <script src="admin.js?v=114"></script>
+  <script src="image-resolver.js?v=1"></script>
+  <script src="admin.js?v=115"></script>
   <script>
     // Keep the admin page on fresh code: when an updated service worker takes
     // control, reload once (guarded against loops and first-registration).

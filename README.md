@@ -53,7 +53,7 @@ or domain without configuration.
 - **Per-product sizes with their own prices** (admin-managed; authoritative on the server)
 - **China pre-orders** as a per-product listing type (independent of category)
 - Cart, checkout (records the order, then hands off to WhatsApp), order tracking
-- Product reviews, wishlist, optional customer accounts
+- Product reviews, guest wishlist, and verified Firebase customer accounts
 - Installable **PWA** (add to home screen, offline app shell)
 
 ### Admin panel
@@ -68,7 +68,7 @@ or domain without configuration.
 
 ## Getting started (local)
 
-Requires Node.js (18+ recommended).
+Requires Node.js 22.13 or newer.
 
 ```bash
 cd server
@@ -80,6 +80,7 @@ The server prints the port it's listening on (default **3000**). Then open:
 
 - Storefront: <http://localhost:3000/>
 - Admin: <http://localhost:3000/admin.html>
+- Customer account: <http://localhost:3000/account.html>
 
 > **First-boot admin account:** username `admin`. On a fresh database the password is
 > taken from the `ADMIN_PASSWORD` env var, or a strong random one is generated and
@@ -101,6 +102,8 @@ Set these in `server/.env` (see `DEPLOYMENT.md` for the full table):
 | `PORT` | Listening port (default 3000; most hosts inject this). |
 | `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` | Optional order alerts. `TELEGRAM_CHAT_ID` accepts multiple comma-separated chat/channel IDs. |
 | `SHOP_NOTIFY_EMAIL`, `SMTP_*` | Optional transactional email. |
+| `FIREBASE_API_KEY`, `FIREBASE_AUTH_DOMAIN`, `FIREBASE_PROJECT_ID`, `FIREBASE_APP_ID` | Public Firebase web-app configuration for customer authentication. |
+| `GOOGLE_APPLICATION_CREDENTIALS` | External service-account path when the host does not provide Application Default Credentials. |
 
 ---
 
@@ -135,10 +138,22 @@ See **[DEPLOYMENT.md](DEPLOYMENT.md)** for the full checklist. In short: serve o
 
 ## Tech notes
 
-- **Security:** bcrypt password hashing, JWT auth with role-gated routes, parameterized
+- **Security:** Firebase bearer ID tokens for verified customer accounts, separate admin JWT auth, bcrypt password hashing for legacy/admin records, parameterized
   SQL throughout, server-side order pricing (never trusts client-sent prices),
   manual security headers, in-memory rate limiting, MIME-validated image uploads.
 - **PWA:** separate storefront/admin manifests + a service worker (network-first for
   HTML/JS/CSS, cache-first for images/fonts).
 - **Images:** product/promo images are downscaled to ≤1000px and recompressed; pre-edit
   originals are kept in the gitignored `_image_originals_backup/`.
+
+
+## Catalogue images and production data
+
+SQLite (`server/inventory.db`, or `DB_PATH`) is authoritative once the app is running in production. `products.json` is the fresh-install seed and offline catalogue snapshot; editing it does not update an existing production database.
+
+Products without genuine photography reuse clearly labelled category artwork from `images/category-fallbacks/`; startup also backfills existing placeholder rows to their matching category asset. These images remain marked **Category image** and still appear in the missing-real-photo report. Managers can use **Products ? Bulk photos** to upload JPG, PNG, or WebP files named by SKU (for example `CLO-0001.jpg`) or `product-<id>.jpg`. The admin preview reports matched, unmatched, and duplicate files before upload, processes three files concurrently, and updates successful mappings transactionally.
+
+The product catalogue CSV export/import includes both `sku` and `img`. Use **Image health** to find missing images, missing or duplicate SKUs, invalid image paths, and unused uploaded files.
+## Tailwind CSS build
+
+Tailwind is compiled locally rather than loaded from the development CDN. From `server/`, run `npm run build:css` after changing utility classes in `index.html`, `app.js`, `admin.html`, or `admin.js`. The command regenerates `tailwind-storefront.css` and `tailwind-admin.css`; the admin bundle intentionally disables Tailwind preflight so it does not reset `admin.css`.

@@ -4,6 +4,8 @@ const express = require('express');
 const cors = require('cors');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
+const { initializeApp: initializeFirebaseAdmin, applicationDefault, getApps: getFirebaseApps } = require('firebase-admin/app');
+const { getAuth: getFirebaseAuth } = require('firebase-admin/auth');
 const db = require('./db');
 
 const app = express();
@@ -52,8 +54,27 @@ if (IS_PROD && ALLOWED_ORIGINS.length) {
     app.use(cors()); // dev: allow all
 }
 
-app.use(express.json({ limit: '8mb' }));
+app.use(express.json({
+    limit: '8mb',
+    verify: (req, res, buffer) => {
+        if (String(req.originalUrl || '').startsWith('/api/payments/paystack/webhook')) {
+            req.rawBody = Buffer.from(buffer);
+        }
+    }
+}));
 app.use(express.urlencoded({ limit: '8mb', extended: true }));
+
+// Authenticated and customer-account responses contain private data and must
+// never be retained by browsers, CDNs, or the service worker.
+app.use((req, res, next) => {
+    const pathName = String(req.path || '');
+    if (req.headers.authorization || pathName.startsWith('/api/customer/') || pathName.startsWith('/api/wishlist') ||
+        pathName.startsWith('/api/payments/') || pathName.startsWith('/api/checkout/paystack')) {
+        res.setHeader('Cache-Control', 'private, no-store, max-age=0');
+        res.setHeader('Pragma', 'no-cache');
+    }
+    next();
+});
 
 // Serve the frontend static files.
 // HTML, the service worker, and CSS/JS must never be cached by the browser/proxy.
@@ -73,6 +94,31 @@ app.use(express.static(path.join(__dirname, '..'), {
 }));
 
 const JWT_SECRET = process.env.JWT_SECRET || 'dckids-super-secret-key-change-in-production';
+
+// Customer authentication is handled by Firebase. These web-app values are
+// public identifiers (not secrets) and are exposed through /api/customer/auth/config.
+// Server credentials stay outside the repository and are discovered through
+// Application Default Credentials / GOOGLE_APPLICATION_CREDENTIALS.
+const FIREBASE_PUBLIC_CONFIG = {
+    apiKey: String(process.env.FIREBASE_API_KEY || '').trim(),
+    authDomain: String(process.env.FIREBASE_AUTH_DOMAIN || '').trim(),
+    projectId: String(process.env.FIREBASE_PROJECT_ID || '').trim(),
+    appId: String(process.env.FIREBASE_APP_ID || '').trim()
+};
+let firebaseCustomerAuth = null;
+if (FIREBASE_PUBLIC_CONFIG.projectId) {
+    try {
+        const firebaseApp = getFirebaseApps()[0] || initializeFirebaseAdmin({
+            credential: applicationDefault(),
+            projectId: FIREBASE_PUBLIC_CONFIG.projectId
+        });
+        firebaseCustomerAuth = getFirebaseAuth(firebaseApp);
+    } catch (err) {
+        console.error('[firebase] Admin SDK initialization failed:', err.message);
+    }
+} else {
+    console.warn('[firebase] FIREBASE_PROJECT_ID is not set; customer sign-in will remain unavailable.');
+}
 
 // Never run in production on the built-in fallback secret: it's public (it's in
 // this file), so anyone could forge an admin token and take over. Fail fast so a
@@ -111,6 +157,9 @@ const crypto = require('crypto');
 const RESEND_API_KEY = process.env.RESEND_API_KEY || '';
 const RESEND_FROM = process.env.RESEND_FROM || 'DC Kids Admin <onboarding@resend.dev>';
 const APP_URL = process.env.APP_URL || 'http://localhost:3001';
+const SHOP_NOTIFY_EMAIL = String(process.env.SHOP_NOTIFY_EMAIL || '').trim();
+const PAYSTACK_SECRET_KEY = String(process.env.PAYSTACK_SECRET_KEY || '').trim();
+const PAYSTACK_LEGACY_WEBHOOK_URL = String(process.env.PAYSTACK_LEGACY_WEBHOOK_URL || '').trim();
 
 // Google Sign-In (optional). When GOOGLE_CLIENT_ID is set, the admin login page
 // shows a "Continue with Google" button; when unset, the button is hidden and
@@ -681,7 +730,7 @@ const isDuplicateSku = (err) => err && /UNIQUE constraint failed: products\.sku/
 // Category-prefix + sequential SKU, e.g. "CLO-0001". Walks forward past any
 // existing number (including gaps from deleted products or manually-typed
 // SKUs) so it always lands on something genuinely free.
-const SKU_PREFIXES = { clothing: 'CLO', shoes: 'SHO', accessories: 'ACC', newborn: 'NEW', bedding: 'BED', essentials: 'ESS' };
+const SKU_PREFIXES = { clothing: 'CLO', shoes: 'SHO', accessories: 'ACC', newborn: 'NEW', bedding: 'BED', essentials: 'ESS', feeding: 'FEE', gear: 'GEA', bathcare: 'BAT' };
 function skuPrefixFor(cat) {
     return SKU_PREFIXES[cat] || (String(cat || 'GEN').replace(/[^a-zA-Z]/g, '').slice(0, 3).toUpperCase() || 'GEN');
 }
@@ -1022,8 +1071,12 @@ function getPriceModifier(sizeLabel) {
 }
 
 // Create new order (Storefront)
-app.post('/api/orders', (req, res) => {
-    const { customer_name, customer_phone, order_type, items, payment_method, delivery_area, notes } = req.body;
+app.post('/api/orders', optionalCustomer, (req, res) => {
+    const { customer_name, customer_phone, customer_email, order_type, items, payment_method, delivery_area, delivery_address, notes } = req.body;
+    const address = delivery_address && typeof delivery_address === 'object' ? delivery_address : {};
+    const authoritativeEmail = req.customer && req.customer.email
+        ? String(req.customer.email).trim().toLowerCase()
+        : String(customer_email || '').trim().toLowerCase();
 
     if (!Array.isArray(items) || items.length === 0) {
         return res.status(400).json({ error: 'Order must contain items' });
@@ -1049,7 +1102,12 @@ app.post('/api/orders', (req, res) => {
     }
     if (customer_name && String(customer_name).length > 100) return res.status(400).json({ error: 'Name is too long' });
     if (customer_phone && String(customer_phone).length > 30) return res.status(400).json({ error: 'Phone number is too long' });
+    if (authoritativeEmail && (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(authoritativeEmail) || authoritativeEmail.length > 254)) return res.status(400).json({ error: 'Enter a valid email address' });
     if (delivery_area && String(delivery_area).length > 200) return res.status(400).json({ error: 'Delivery area is too long' });
+    if (String(address.line1 || '').length > 200 || String(address.line2 || '').length > 200 ||
+        String(address.city || '').length > 100 || String(address.region || '').length > 100 || String(address.landmark || '').length > 200) {
+        return res.status(400).json({ error: 'Delivery address is too long' });
+    }
     if (notes && String(notes).length > 1000) return res.status(400).json({ error: 'Notes are too long (max 1000 characters)' });
     
     // 1. Fetch store settings for wholesale math
@@ -1127,8 +1185,12 @@ app.post('/api/orders', (req, res) => {
                 const tempNumber = 'TMP-' + Date.now() + '-' + Math.floor(Math.random() * 1e6);
 
                 db.run(
-                    `INSERT INTO orders (order_number, customer_name, customer_phone, order_type, total_amount, status, delivery_area, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-                    [tempNumber, customer_name, customer_phone, order_type, total_amount, initialStatus, delivery_area || null, notes || null],
+                    `INSERT INTO orders (order_number, customer_name, customer_phone, customer_email, order_type, total_amount, status,
+                        delivery_area, delivery_address_line1, delivery_address_line2, delivery_city, delivery_region, delivery_landmark,
+                        notes, customer_account_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                    [tempNumber, customer_name, customer_phone, authoritativeEmail || null, order_type, total_amount, initialStatus,
+                        delivery_area || address.city || null, address.line1 || null, address.line2 || null, address.city || null,
+                        address.region || null, address.landmark || null, notes || null, req.customer ? req.customer.cid : null],
                     function(err) {
                         if (err) return serverError(res, err);
 
@@ -1149,7 +1211,7 @@ app.post('/api/orders', (req, res) => {
 
                         db.run(
                             `INSERT INTO payments (order_id, payment_method, amount, status) VALUES (?, ?, ?, ?)`,
-                            [order_id, payment_method || 'Mobile Money', total_amount, initialStatus === 'pending' ? 'pending' : 'pending_deposit']
+                            [order_id, payment_method || 'WhatsApp', total_amount, initialStatus === 'pending' ? 'pending' : 'pending_deposit']
                         );
 
                         // Fire-and-forget WhatsApp alert to the shop owner (graceful)
@@ -1176,6 +1238,367 @@ app.post('/api/orders', (req, res) => {
                 serverError(res, err);
             });
     });
+});
+
+function paymentError(message, status) {
+    const error = new Error(message);
+    error.status = status || 400;
+    return error;
+}
+
+function normalizePaystackCheckout(body, customer) {
+    const source = body || {};
+    const items = source.items;
+    if (!Array.isArray(items) || items.length === 0) throw paymentError('Order must contain items');
+    if (items.length > 50) throw paymentError('Too many items in one order (max 50)');
+    const orderType = String(source.order_type || 'retail').toLowerCase();
+    const isWholesale = orderType === 'wholesale';
+    const quantityCap = isWholesale ? 1000 : 100;
+    items.forEach((item) => {
+        if (!Number.isInteger(Number(item.id)) || Number(item.id) < 1) throw paymentError('Invalid product id in order');
+        if (!Number.isInteger(Number(item.quantity)) || Number(item.quantity) < 1 || Number(item.quantity) > quantityCap) {
+            throw paymentError(`Quantity must be a whole number between 1 and ${quantityCap}`);
+        }
+    });
+
+    const customerName = String(source.customer_name || '').trim();
+    const customerPhone = String(source.customer_phone || '').trim();
+    const customerEmail = customer && customer.email
+        ? String(customer.email).trim().toLowerCase()
+        : String(source.customer_email || '').trim().toLowerCase();
+    const address = source.delivery_address && typeof source.delivery_address === 'object' ? source.delivery_address : {};
+    const normalizedAddress = {
+        line1: String(address.line1 || '').trim(),
+        line2: String(address.line2 || '').trim(),
+        city: String(address.city || source.delivery_area || '').trim(),
+        region: String(address.region || '').trim(),
+        landmark: String(address.landmark || '').trim()
+    };
+    const notes = String(source.notes || '').trim();
+
+    if (!customerName) throw paymentError('Customer name is required');
+    if (!customerPhone) throw paymentError('Phone number is required');
+    if (customerName.length > 100) throw paymentError('Name is too long');
+    if (customerPhone.length > 30) throw paymentError('Phone number is too long');
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(customerEmail) || customerEmail.length > 254) throw paymentError('Enter a valid email address');
+    if (!normalizedAddress.line1 || !normalizedAddress.city || !normalizedAddress.region) {
+        throw paymentError('Full delivery address, city or area, and region are required for Paystack');
+    }
+    [['Address', normalizedAddress.line1, 200], ['Address line 2', normalizedAddress.line2, 200],
+        ['City or area', normalizedAddress.city, 100], ['Region', normalizedAddress.region, 100],
+        ['Landmark', normalizedAddress.landmark, 200]].forEach(([label, value, max]) => {
+        if (value.length > max) throw paymentError(`${label} is too long`);
+    });
+    if (notes.length > 1000) throw paymentError('Notes are too long (max 1000 characters)');
+
+    return { items, orderType, isWholesale, customerName, customerPhone, customerEmail, address: normalizedAddress, notes };
+}
+
+async function pricePaystackCheckout(checkout) {
+    const settings = await dbGetAsync('SELECT * FROM store_settings WHERE id = 1');
+    const minimumOrder = settings ? Number(settings.wholesale_moq || 10) : 10;
+    const discount = settings ? Number(settings.wholesale_discount || 0) : 0;
+    const processedItems = await Promise.all(checkout.items.map(async (item) => {
+        const product = await dbGetAsync('SELECT * FROM products WHERE id = ?', [Number(item.id)]);
+        if (!product) throw paymentError(`Product ${item.id} not found`);
+        const managedSizes = parseSizesJson(product.sizes);
+        const sizeMatch = managedSizes ? managedSizes.find((size) => size.label === item.size) : null;
+        let unitPrice = sizeMatch && sizeMatch.price != null ? Number(sizeMatch.price) : Number(product.price || 0);
+        if (checkout.isWholesale) unitPrice *= (1 - discount / 100);
+        if (!sizeMatch) unitPrice += getPriceModifier(item.size);
+        unitPrice = Math.round(unitPrice * 100) / 100;
+        const quantity = Number(item.quantity);
+        if (checkout.isWholesale && quantity < minimumOrder) throw paymentError(`Wholesale orders need at least ${minimumOrder} pieces per item`);
+        return {
+            product_id: product.id,
+            product_name: `${product.name} (${item.size || 'Standard'})`,
+            quantity,
+            price_at_time: unitPrice
+        };
+    }));
+    const totalAmount = Math.round(processedItems.reduce((sum, item) => sum + item.price_at_time * item.quantity, 0) * 100) / 100;
+    return { processedItems, totalAmount };
+}
+
+async function createPaystackOrder(checkout, priced, customer) {
+    let transactionOpen = false;
+    try {
+        await dbRunAsync('BEGIN IMMEDIATE');
+        transactionOpen = true;
+        const temporaryNumber = `TMP-${Date.now()}-${crypto.randomBytes(6).toString('hex')}`;
+        const inserted = await dbRunAsync(
+            `INSERT INTO orders (order_number, customer_name, customer_phone, customer_email, order_type, total_amount, status,
+                delivery_area, delivery_address_line1, delivery_address_line2, delivery_city, delivery_region,
+                delivery_landmark, notes, customer_account_id)
+             VALUES (?, ?, ?, ?, ?, ?, 'awaiting_payment', ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [temporaryNumber, checkout.customerName, checkout.customerPhone, checkout.customerEmail, checkout.orderType,
+                priced.totalAmount, checkout.address.city, checkout.address.line1, checkout.address.line2 || null,
+                checkout.address.city, checkout.address.region, checkout.address.landmark || null, checkout.notes || null,
+                customer ? customer.cid : null]
+        );
+        const orderId = inserted.lastID;
+        const orderNumber = `ORD-${10000 + orderId}`;
+        const reference = `DCK-${orderId}-${crypto.randomBytes(10).toString('hex')}`;
+        await dbRunAsync('UPDATE orders SET order_number = ? WHERE id = ?', [orderNumber, orderId]);
+        for (const item of priced.processedItems) {
+            await dbRunAsync(
+                'INSERT INTO order_items (order_id, product_id, product_name, quantity, price_at_time) VALUES (?, ?, ?, ?, ?)',
+                [orderId, item.product_id, item.product_name, item.quantity, item.price_at_time]
+            );
+        }
+        await dbRunAsync('INSERT OR IGNORE INTO customers (name, phone, email) VALUES (?, ?, ?)',
+            [checkout.customerName, checkout.customerPhone, checkout.customerEmail]);
+        const payment = await dbRunAsync(
+            `INSERT INTO payments (order_id, payment_method, amount, status, provider, provider_reference, currency)
+             VALUES (?, 'Paystack', ?, 'pending', 'paystack', ?, 'GHS')`,
+            [orderId, priced.totalAmount, reference]
+        );
+        await dbRunAsync('COMMIT');
+        transactionOpen = false;
+        return { orderId, orderNumber, paymentId: payment.lastID, reference };
+    } catch (error) {
+        if (transactionOpen) {
+            try { await dbRunAsync('ROLLBACK'); } catch (rollbackError) { console.error('[Paystack order rollback]', rollbackError.message); }
+        }
+        throw error;
+    }
+}
+
+function paystackApiRequest(apiPath, method, payload) {
+    const injected = app.get('paystackApiRequest');
+    if (typeof injected === 'function') return injected(apiPath, method, payload);
+    return new Promise((resolve, reject) => {
+        const body = payload ? JSON.stringify(payload) : '';
+        const request = https.request({
+            hostname: 'api.paystack.co', path: apiPath, method,
+            headers: {
+                Authorization: `Bearer ${PAYSTACK_SECRET_KEY}`,
+                'Content-Type': 'application/json',
+                ...(body ? { 'Content-Length': Buffer.byteLength(body) } : {})
+            },
+            timeout: 12000
+        }, (response) => {
+            let responseBody = '';
+            response.on('data', (chunk) => { responseBody += chunk; });
+            response.on('end', () => {
+                try {
+                    const parsed = JSON.parse(responseBody || '{}');
+                    if (response.statusCode >= 200 && response.statusCode < 300 && parsed.status) return resolve(parsed.data);
+                    reject(paymentError(parsed.message || 'Paystack request failed', response.statusCode >= 500 ? 502 : 400));
+                } catch (error) { reject(paymentError('Paystack returned an invalid response', 502)); }
+            });
+        });
+        request.on('timeout', () => request.destroy(new Error('Paystack request timed out')));
+        request.on('error', (error) => reject(paymentError(error.message || 'Could not reach Paystack', 502)));
+        if (body) request.write(body);
+        request.end();
+    });
+}
+
+async function markOrderPaid(orderId, paymentId, providerData) {
+    let transactionOpen = false;
+    try {
+        await dbRunAsync('BEGIN IMMEDIATE');
+        transactionOpen = true;
+        const order = await dbGetAsync('SELECT id, status FROM orders WHERE id = ?', [orderId]);
+        if (!order) throw paymentError('Order not found', 404);
+        const becamePaid = String(order.status || '').toLowerCase() !== 'paid';
+        if (becamePaid) {
+            const items = await dbAllAsync('SELECT product_id, quantity FROM order_items WHERE order_id = ?', [orderId]);
+            for (const item of items) {
+                await dbRunAsync('UPDATE products SET stock = MAX(0, stock - ?) WHERE id = ?', [Number(item.quantity || 0), item.product_id]);
+            }
+            await dbRunAsync("UPDATE orders SET status = 'paid', updated_at = CURRENT_TIMESTAMP WHERE id = ?", [orderId]);
+        }
+        if (paymentId) {
+            const data = providerData || {};
+            await dbRunAsync(
+                `UPDATE payments SET status = 'paid', provider_transaction_id = COALESCE(?, provider_transaction_id),
+                    channel = COALESCE(?, channel), gateway_response = COALESCE(?, gateway_response),
+                    paid_at = COALESCE(?, paid_at, CURRENT_TIMESTAMP), updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+                [data.id != null ? String(data.id) : null, data.channel || null, data.gateway_response || null,
+                    data.paid_at || data.paidAt || null, paymentId]
+            );
+        } else {
+            await dbRunAsync(
+                `UPDATE payments SET status = 'paid', paid_at = COALESCE(paid_at, CURRENT_TIMESTAMP), updated_at = CURRENT_TIMESTAMP
+                  WHERE id = (SELECT id FROM payments WHERE order_id = ? ORDER BY id DESC LIMIT 1)`,
+                [orderId]
+            );
+        }
+        await dbRunAsync('COMMIT');
+        transactionOpen = false;
+        return { becamePaid };
+    } catch (error) {
+        if (transactionOpen) {
+            try { await dbRunAsync('ROLLBACK'); } catch (rollbackError) { console.error('[Paid order rollback]', rollbackError.message); }
+        }
+        throw error;
+    }
+}
+
+async function sendPaidOrderOwnerEmail(orderId, paymentId) {
+    if (!SHOP_NOTIFY_EMAIL) return { skipped: true };
+    const claimed = await dbRunAsync(
+        'UPDATE payments SET owner_notified_at = CURRENT_TIMESTAMP WHERE id = ? AND owner_notified_at IS NULL',
+        [paymentId]
+    );
+    if (!claimed.changes) return { duplicate: true };
+    const order = await dbGetAsync('SELECT * FROM orders WHERE id = ?', [orderId]);
+    const items = await dbAllAsync('SELECT * FROM order_items WHERE order_id = ? ORDER BY id', [orderId]);
+    const itemRows = items.map((item) => `<tr><td style="padding:7px 0">${escapeHtmlServer(item.product_name)}</td><td>${Number(item.quantity || 0)}</td><td>GHS ${Number(item.price_at_time || 0).toFixed(2)}</td></tr>`).join('');
+    const address = [order.delivery_address_line1, order.delivery_address_line2, order.delivery_city, order.delivery_region, order.delivery_landmark]
+        .filter(Boolean).map(escapeHtmlServer).join(', ');
+    const html = `<h2>Paid DC Kids order ${escapeHtmlServer(order.order_number)}</h2>
+        <p><strong>Customer:</strong> ${escapeHtmlServer(order.customer_name)}<br>
+        <strong>Phone:</strong> ${escapeHtmlServer(order.customer_phone)}<br>
+        <strong>Email:</strong> ${escapeHtmlServer(order.customer_email)}<br>
+        <strong>Delivery address:</strong> ${address || 'Not supplied'}</p>
+        <table style="width:100%;border-collapse:collapse"><thead><tr><th align="left">Item</th><th align="left">Qty</th><th align="left">Unit price</th></tr></thead><tbody>${itemRows}</tbody></table>
+        <p><strong>Products paid:</strong> GHS ${Number(order.total_amount || 0).toFixed(2)}</p>
+        <p><strong>Delivery is not included.</strong> Contact the customer to confirm and collect the delivery charge.</p>`;
+    try {
+        const injected = app.get('sendOrderNotificationEmail');
+        const result = typeof injected === 'function'
+            ? await injected({ to: SHOP_NOTIFY_EMAIL, subject: `Paid order ${order.order_number}`, html, order, items })
+            : await sendEmail(SHOP_NOTIFY_EMAIL, `Paid order ${order.order_number}`, html);
+        if (result && result.ok === false) await dbRunAsync('UPDATE payments SET owner_notified_at = NULL WHERE id = ?', [paymentId]);
+        return result;
+    } catch (error) {
+        await dbRunAsync('UPDATE payments SET owner_notified_at = NULL WHERE id = ?', [paymentId]);
+        throw error;
+    }
+}
+
+async function processPaystackSuccess(data) {
+    const reference = String(data && data.reference || '');
+    const payment = await dbGetAsync(
+        `SELECT p.*, o.order_number, o.status AS order_status FROM payments p
+          JOIN orders o ON o.id = p.order_id WHERE p.provider_reference = ?`,
+        [reference]
+    );
+    if (!payment) throw paymentError('Unknown DC Kids payment reference', 404);
+    const metadata = data.metadata && typeof data.metadata === 'object' ? data.metadata : {};
+    const mismatched = String(data.status || '').toLowerCase() !== 'success' ||
+        Number(data.amount) !== Math.round(Number(payment.amount || 0) * 100) ||
+        String(data.currency || '').toUpperCase() !== 'GHS' ||
+        (metadata.source_app && metadata.source_app !== 'dckids') ||
+        (metadata.order_number && metadata.order_number !== payment.order_number);
+    if (mismatched) {
+        await dbRunAsync("UPDATE payments SET status = 'review', gateway_response = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            ['Paystack amount, currency, status, or metadata did not match the order', payment.id]);
+        await dbRunAsync("UPDATE orders SET status = 'payment_review', updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status <> 'paid'", [payment.order_id]);
+        return { status: 'review' };
+    }
+    const result = await markOrderPaid(payment.order_id, payment.id, data);
+    await sendPaidOrderOwnerEmail(payment.order_id, payment.id);
+    return { status: 'paid', becamePaid: result.becamePaid };
+}
+
+function validPaystackSignature(rawBody, signature) {
+    if (!PAYSTACK_SECRET_KEY || !rawBody || !signature) return false;
+    const expected = crypto.createHmac('sha512', PAYSTACK_SECRET_KEY).update(rawBody).digest('hex');
+    const supplied = String(signature).trim().toLowerCase();
+    if (expected.length !== supplied.length) return false;
+    return crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(supplied));
+}
+
+async function forwardLegacyPaystackEvent(rawBody, signature) {
+    const injected = app.get('forwardLegacyPaystackWebhook');
+    if (typeof injected === 'function') return injected(rawBody, signature);
+    if (!PAYSTACK_LEGACY_WEBHOOK_URL) throw paymentError('Legacy Paystack webhook forwarding is not configured', 503);
+    const target = new URL(PAYSTACK_LEGACY_WEBHOOK_URL);
+    if (IS_PROD && target.protocol !== 'https:') throw paymentError('Legacy Paystack webhook must use HTTPS', 503);
+    const response = await fetch(target, {
+        method: 'POST', body: rawBody,
+        headers: { 'Content-Type': 'application/json', 'x-paystack-signature': signature },
+        signal: globalThis.AbortSignal.timeout(10000)
+    });
+    if (!response.ok) throw paymentError(`Legacy webhook returned ${response.status}`, 502);
+    return { ok: true };
+}
+
+app.get('/api/payments/paystack/config', (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({ enabled: Boolean(PAYSTACK_SECRET_KEY) });
+});
+
+app.post('/api/checkout/paystack', optionalCustomer, async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    if (!PAYSTACK_SECRET_KEY && typeof app.get('paystackApiRequest') !== 'function') {
+        return res.status(503).json({ error: 'Paystack checkout is not configured' });
+    }
+    let created = null;
+    try {
+        const checkout = normalizePaystackCheckout(req.body, req.customer);
+        const priced = await pricePaystackCheckout(checkout);
+        created = await createPaystackOrder(checkout, priced, req.customer);
+        const callbackUrl = `${APP_URL.replace(/\/$/, '')}/payment-result.html`;
+        const initialized = await paystackApiRequest('/transaction/initialize', 'POST', {
+            email: checkout.customerEmail,
+            amount: String(Math.round(priced.totalAmount * 100)),
+            currency: 'GHS', reference: created.reference, callback_url: callbackUrl,
+            metadata: { source_app: 'dckids', order_number: created.orderNumber, cancel_action: callbackUrl }
+        });
+        if (!initialized || !initialized.authorization_url || initialized.reference !== created.reference) {
+            throw paymentError('Paystack did not initialize the payment correctly', 502);
+        }
+        res.json({ order_number: created.orderNumber, reference: created.reference, authorization_url: initialized.authorization_url });
+    } catch (error) {
+        if (created) {
+            try {
+                await dbRunAsync("UPDATE orders SET status = 'payment_failed', updated_at = CURRENT_TIMESTAMP WHERE id = ?", [created.orderId]);
+                await dbRunAsync("UPDATE payments SET status = 'failed', gateway_response = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                    [String(error.message || 'Paystack initialization failed').slice(0, 500), created.paymentId]);
+            } catch (updateError) { console.error('[Paystack initialization cleanup]', updateError.message); }
+        }
+        if (error.status) return res.status(error.status).json({ error: error.message });
+        serverError(res, error);
+    }
+});
+
+app.get('/api/payments/paystack/status/:reference', async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    const reference = String(req.params.reference || '');
+    if (!/^DCK-[0-9]+-[a-f0-9]{20}$/i.test(reference)) return res.status(400).json({ error: 'Invalid payment reference' });
+    try {
+        let payment = await dbGetAsync(
+            `SELECT p.status AS payment_status, o.status AS order_status, o.order_number
+               FROM payments p JOIN orders o ON o.id = p.order_id WHERE p.provider_reference = ?`, [reference]
+        );
+        if (!payment) return res.status(404).json({ error: 'Payment not found' });
+        if (payment.payment_status === 'pending' && PAYSTACK_SECRET_KEY) {
+            try {
+                const verified = await paystackApiRequest(`/transaction/verify/${encodeURIComponent(reference)}`, 'GET');
+                if (verified && verified.status === 'success') await processPaystackSuccess(verified);
+                payment = await dbGetAsync(
+                    `SELECT p.status AS payment_status, o.status AS order_status, o.order_number
+                       FROM payments p JOIN orders o ON o.id = p.order_id WHERE p.provider_reference = ?`, [reference]
+                );
+            } catch (error) { console.warn('[Paystack status verification]', error.message); }
+        }
+        res.json({ order_number: payment.order_number, payment_status: payment.payment_status, order_status: payment.order_status });
+    } catch (error) { serverError(res, error); }
+});
+
+app.post('/api/payments/paystack/webhook', async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    const signature = String(req.headers['x-paystack-signature'] || '');
+    if (!validPaystackSignature(req.rawBody, signature)) return res.status(401).json({ error: 'Invalid Paystack signature' });
+    const event = req.body || {};
+    const reference = String(event.data && event.data.reference || '');
+    try {
+        if (!reference.startsWith('DCK-')) {
+            await forwardLegacyPaystackEvent(req.rawBody, signature);
+            return res.json({ received: true, forwarded: true });
+        }
+        if (event.event === 'charge.success') await processPaystackSuccess(event.data);
+        res.json({ received: true });
+    } catch (error) {
+        if (error.status === 404) return res.status(404).json({ error: error.message });
+        console.error('[Paystack webhook]', error.message);
+        res.status(error.status || 500).json({ error: 'Paystack webhook could not be processed' });
+    }
 });
 
 // List orders (Admin)
@@ -1207,7 +1630,15 @@ app.get('/api/orders', authenticateToken, (req, res) => {
                 (byOrder[it.order_id] = byOrder[it.order_id] || []).push(it);
             });
             orders.forEach(o => { o.items = byOrder[o.id] || []; });
-            res.json(orders);
+            db.all(`SELECT * FROM payments WHERE order_id IN (${placeholders}) ORDER BY id DESC`, ids, (paymentErr, allPayments) => {
+                if (paymentErr) return serverError(res, paymentErr);
+                const paymentByOrder = {};
+                (allPayments || []).forEach((payment) => {
+                    if (!paymentByOrder[payment.order_id]) paymentByOrder[payment.order_id] = payment;
+                });
+                orders.forEach((order) => { order.payment = paymentByOrder[order.id] || null; });
+                res.json(orders);
+            });
         });
     });
 });
@@ -1235,7 +1666,7 @@ app.get('/api/orders/:id/item-preview', authenticateToken, (req, res) => {
                 
                 // Fallback details if product doesn't exist anymore
                 const pName = product ? product.name : primaryItem.product_name;
-                const pImg = product ? product.img : 'images/placeholder.png';
+                const pImg = product ? product.img : 'images/placeholder.svg';
                 const pCat = product ? product.cat : 'clothing';
                 const pPrice = product ? product.price : primaryItem.price_at_time;
                 const pSize = product ? product.size : 'Standard';
@@ -1294,7 +1725,7 @@ app.get('/api/orders/:id/item-preview', authenticateToken, (req, res) => {
                                 quantity: row.quantity,
                                 price_at_time: row.price_at_time,
                                 product_id: row.product_id,
-                                image: imgById[row.product_id] || pImg || 'images/placeholder.png',
+                                image: imgById[row.product_id] || pImg || 'images/placeholder.svg',
                                 category: catById[row.product_id] || pCat
                             }))
                         });
@@ -1306,8 +1737,8 @@ app.get('/api/orders/:id/item-preview', authenticateToken, (req, res) => {
 });
 
 // Update order status (Admin)
-const ORDER_STATUSES = ['pending', 'pending_deposit', 'processing', 'paid', 'shipped', 'dispatched', 'delivered', 'completed', 'cancelled'];
-app.put('/api/orders/:id', authenticateToken, (req, res) => {
+const ORDER_STATUSES = ['pending', 'pending_deposit', 'awaiting_payment', 'payment_failed', 'payment_review', 'processing', 'paid', 'shipped', 'dispatched', 'delivered', 'completed', 'cancelled'];
+app.put('/api/orders/:id', authenticateToken, async (req, res) => {
     const { status } = req.body;
     const orderId = req.params.id;
     const normStatus = String(status || '').toLowerCase();
@@ -1315,31 +1746,16 @@ app.put('/api/orders/:id', authenticateToken, (req, res) => {
         return res.status(400).json({ error: 'Invalid status. Allowed: ' + ORDER_STATUSES.join(', ') });
     }
 
-    db.get(`SELECT status FROM orders WHERE id = ?`, [orderId], (err, order) => {
-        if (err) return serverError(res, err);
+    try {
+        const order = await dbGetAsync('SELECT status FROM orders WHERE id = ?', [orderId]);
         if (!order) return res.status(404).json({ error: 'Order not found' });
-
-        db.run(
-            `UPDATE orders SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
-            [normStatus, orderId],
-            function (err) {
-                if (err) return serverError(res, err);
-
-                // If transitioning to paid, deduct stock
-                if (normStatus === 'paid' && order.status !== 'paid') {
-                    db.all(`SELECT * FROM order_items WHERE order_id = ?`, [orderId], (err, items) => {
-                        if (!err && items) {
-                            items.forEach(item => {
-                                db.run(`UPDATE products SET stock = MAX(0, stock - ?) WHERE id = ?`, [item.quantity, item.product_id]);
-                            });
-                        }
-                    });
-                }
-                
-                res.json({ success: true, changes: this.changes });
-            }
-        );
-    });
+        if (normStatus === 'paid') {
+            const result = await markOrderPaid(orderId, null, null);
+            return res.json({ success: true, changes: result.becamePaid ? 1 : 0 });
+        }
+        const updated = await dbRunAsync('UPDATE orders SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', [normStatus, orderId]);
+        res.json({ success: true, changes: updated.changes });
+    } catch (error) { serverError(res, error); }
 });
 
 app.delete('/api/orders/:id', authenticateToken, (req, res) => {
@@ -1456,7 +1872,8 @@ function completedOrder(status) {
 }
 
 function revenueOrder(order) {
-    return String(order.status || '').toLowerCase() !== 'cancelled';
+    return !['cancelled', 'awaiting_payment', 'payment_failed', 'payment_review']
+        .includes(String(order.status || '').toLowerCase());
 }
 
 function orderRevenue(order) {
@@ -1705,56 +2122,179 @@ app.get('/api/analytics/sales/export', authenticateToken, async (req, res) => {
 //   routes (me/addresses/wishlist) stay mounted: without login nobody can mint
 //   a customer token, so they are unreachable until the flag is on.
 // ===========================================================================
-const CUSTOMER_ACCOUNTS_ENABLED = String(process.env.CUSTOMER_ACCOUNTS_ENABLED || '').toLowerCase() === 'true';
-const requireCustomerAccountsEnabled = (req, res, next) => {
-    if (!CUSTOMER_ACCOUNTS_ENABLED) return res.status(404).json({ error: 'Customer accounts are not available' });
-    next();
-};
-const authenticateCustomer = (req, res, next) => {
-    const authHeader = req.headers['authorization'];
-    const token = authHeader && authHeader.split(' ')[1];
-    if (!token) return res.status(401).json({ error: 'Not signed in' });
-    jwt.verify(token, JWT_SECRET, (err, decoded) => {
-        if (err || !decoded || decoded.kind !== 'customer') return res.status(403).json({ error: 'Invalid customer session' });
-        req.customer = decoded;
-        next();
-    });
-};
-
-app.post('/api/customer/register', requireCustomerAccountsEnabled, registerLimiter, async (req, res) => {
-    try {
-        const { name, email, phone, password } = req.body || {};
-        if (!name || !email || !password) return res.status(400).json({ error: 'Name, email and password required' });
-        if (password.length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters' });
-        const password_hash = await bcrypt.hash(password, 10);
-        db.run(
-            `INSERT INTO customer_accounts (email, phone, name, password_hash) VALUES (?, ?, ?, ?)`,
-            [email.trim().toLowerCase(), phone || null, name.trim(), password_hash],
-            function(err) {
-                if (err) {
-                    if (String(err.message).includes('UNIQUE')) return res.status(409).json({ error: 'An account with that email already exists' });
-                    return serverError(res, err);
-                }
-                const cid = this.lastID;
-                const token = jwt.sign({ cid, email: email.toLowerCase(), kind: 'customer' }, JWT_SECRET, { expiresIn: '30d' });
-                res.json({ success: true, token, customer: { id: cid, name, email: email.toLowerCase(), phone: phone || null } });
-            }
-        );
-    } catch (e) { serverError(res, e); }
+const dbGetAsync = (sql, params) => new Promise((resolve, reject) => {
+    db.get(sql, params || [], (err, row) => err ? reject(err) : resolve(row));
+});
+const dbAllAsync = (sql, params) => new Promise((resolve, reject) => {
+    db.all(sql, params || [], (err, rows) => err ? reject(err) : resolve(rows || []));
+});
+const dbRunAsync = (sql, params) => new Promise((resolve, reject) => {
+    db.run(sql, params || [], function (err) { err ? reject(err) : resolve(this); });
 });
 
-app.post('/api/customer/login', requireCustomerAccountsEnabled, loginLimiter, (req, res) => {
-    const { email, password } = req.body || {};
-    if (!email || !password) return res.status(400).json({ error: 'Email and password required' });
-    db.get(`SELECT * FROM customer_accounts WHERE email = ?`, [email.trim().toLowerCase()], async (err, row) => {
-        if (err) return serverError(res, err);
-        if (!row) return res.status(401).json({ error: 'Invalid email or password' });
-        const ok = await bcrypt.compare(password, row.password_hash);
-        if (!ok) return res.status(401).json({ error: 'Invalid email or password' });
-        db.run(`UPDATE customer_accounts SET last_login_at = CURRENT_TIMESTAMP WHERE id = ?`, [row.id]);
-        const token = jwt.sign({ cid: row.id, email: row.email, kind: 'customer' }, JWT_SECRET, { expiresIn: '30d' });
-        res.json({ success: true, token, customer: { id: row.id, name: row.name, email: row.email, phone: row.phone } });
+function bearerToken(req) {
+    const match = /^Bearer\s+(.+)$/i.exec(String(req.headers.authorization || ''));
+    return match ? match[1].trim() : '';
+}
+
+async function verifyCustomerIdToken(idToken) {
+    const injectedVerifier = app.get('verifyCustomerIdToken');
+    if (typeof injectedVerifier === 'function') return injectedVerifier(idToken);
+    if (!firebaseCustomerAuth) {
+        const error = new Error('Customer sign-in is not configured');
+        error.code = 'firebase/not-configured';
+        throw error;
+    }
+    return firebaseCustomerAuth.verifyIdToken(idToken);
+}
+
+async function verifiedCustomerClaims(req, res) {
+    const token = bearerToken(req);
+    if (!token) {
+        res.status(401).json({ error: 'Sign in to continue', code: 'auth/missing-token' });
+        return null;
+    }
+    try {
+        const claims = await verifyCustomerIdToken(token);
+        const email = String(claims && claims.email || '').trim().toLowerCase();
+        if (!claims || !claims.uid || !email) {
+            res.status(401).json({ error: 'Invalid customer session', code: 'auth/invalid-token' });
+            return null;
+        }
+        if (claims.email_verified !== true) {
+            res.status(403).json({ error: 'Verify your email before accessing account data', code: 'auth/email-not-verified' });
+            return null;
+        }
+        return Object.assign({}, claims, { email });
+    } catch (err) {
+        if (err && err.code === 'firebase/not-configured') {
+            res.status(503).json({ error: 'Customer sign-in is not configured', code: err.code });
+            return null;
+        }
+        res.status(401).json({ error: 'Invalid or expired customer session', code: 'auth/invalid-token' });
+        return null;
+    }
+}
+
+async function authenticateCustomer(req, res, next) {
+    const claims = await verifiedCustomerClaims(req, res);
+    if (!claims) return;
+    try {
+        const account = await dbGetAsync(
+            `SELECT id, email, phone, name, firebase_uid, created_at, last_login_at
+               FROM customer_accounts WHERE firebase_uid = ?`,
+            [claims.uid]
+        );
+        if (!account) return res.status(409).json({ error: 'Finish setting up your customer session', code: 'auth/session-required' });
+        req.customer = Object.assign({ cid: account.id, uid: claims.uid }, account);
+        req.firebaseClaims = claims;
+        next();
+    } catch (err) { serverError(res, err); }
+}
+
+function optionalCustomer(req, res, next) {
+    if (!req.headers.authorization) return next();
+    return authenticateCustomer(req, res, next);
+}
+
+// Legacy local-password endpoints stay mounted only as an explicit retirement
+// response for older clients. Firebase handles registration, sign-in,
+// verification, and password reset from now on.
+const requireCustomerAccountsEnabled = (req, res) => {
+    res.status(410).json({ error: 'This sign-in method has been retired. Use the customer account page.' });
+};
+
+app.get('/api/customer/auth/config', (req, res) => {
+    res.json({
+        apiKey: FIREBASE_PUBLIC_CONFIG.apiKey || null,
+        authDomain: FIREBASE_PUBLIC_CONFIG.authDomain || null,
+        projectId: FIREBASE_PUBLIC_CONFIG.projectId || null,
+        appId: FIREBASE_PUBLIC_CONFIG.appId || null
     });
+});
+
+app.post('/api/customer/session', loginLimiter, async (req, res) => {
+    const claims = await verifiedCustomerClaims(req, res);
+    if (!claims) return;
+    const requestedName = String((req.body && req.body.name) || claims.name || '').trim();
+    const requestedPhone = String((req.body && req.body.phone) || '').trim();
+    if (requestedName && (requestedName.length < 2 || requestedName.length > 100)) return res.status(400).json({ error: 'Name must be between 2 and 100 characters' });
+    if (requestedPhone.length > 30) return res.status(400).json({ error: 'Phone number is too long' });
+
+    let transactionOpen = false;
+    try {
+        await dbRunAsync('BEGIN IMMEDIATE');
+        transactionOpen = true;
+        let account = await dbGetAsync(`SELECT * FROM customer_accounts WHERE firebase_uid = ?`, [claims.uid]);
+        let linkedLegacy = false;
+        let created = false;
+
+        if (account) {
+            if (account.email !== claims.email) {
+                const emailOwner = await dbGetAsync(`SELECT id FROM customer_accounts WHERE email = ?`, [claims.email]);
+                if (emailOwner && emailOwner.id !== account.id) {
+                    const conflict = new Error('That verified email is already linked to another customer account');
+                    conflict.status = 409;
+                    throw conflict;
+                }
+            }
+            await dbRunAsync(
+                `UPDATE customer_accounts
+                    SET email = ?, name = CASE WHEN name IS NULL OR trim(name) = '' THEN ? ELSE name END,
+                        phone = CASE WHEN phone IS NULL OR trim(phone) = '' THEN ? ELSE phone END,
+                        last_login_at = CURRENT_TIMESTAMP
+                  WHERE id = ?`,
+                [claims.email, requestedName || claims.email.split('@')[0], requestedPhone || null, account.id]
+            );
+        } else {
+            account = await dbGetAsync(`SELECT * FROM customer_accounts WHERE email = ?`, [claims.email]);
+            if (account && account.firebase_uid && account.firebase_uid !== claims.uid) {
+                const conflict = new Error('That verified email is already linked to another Firebase account');
+                conflict.status = 409;
+                throw conflict;
+            }
+            if (account) {
+                linkedLegacy = !account.firebase_uid;
+                await dbRunAsync(
+                    `UPDATE customer_accounts
+                        SET firebase_uid = ?, name = CASE WHEN name IS NULL OR trim(name) = '' THEN ? ELSE name END,
+                            phone = CASE WHEN phone IS NULL OR trim(phone) = '' THEN ? ELSE phone END,
+                            last_login_at = CURRENT_TIMESTAMP
+                      WHERE id = ?`,
+                    [claims.uid, requestedName || claims.email.split('@')[0], requestedPhone || null, account.id]
+                );
+                const legacyPhone = String(account.phone || '').replace(/\D/g, '');
+                if (linkedLegacy && legacyPhone) {
+                    await dbRunAsync(
+                        `UPDATE orders SET customer_account_id = ?
+                          WHERE customer_account_id IS NULL
+                            AND replace(replace(replace(replace(replace(customer_phone, ' ', ''), '-', ''), '(', ''), ')', ''), '+', '') = ?`,
+                        [account.id, legacyPhone]
+                    );
+                }
+            } else {
+                const inserted = await dbRunAsync(
+                    `INSERT INTO customer_accounts (email, phone, name, password_hash, firebase_uid, last_login_at)
+                     VALUES (?, ?, ?, NULL, ?, CURRENT_TIMESTAMP)`,
+                    [claims.email, requestedPhone || null, requestedName || claims.email.split('@')[0], claims.uid]
+                );
+                account = { id: inserted.lastID };
+                created = true;
+            }
+        }
+
+        const customer = await dbGetAsync(`SELECT id, email, phone, name, created_at, last_login_at FROM customer_accounts WHERE id = ?`, [account.id]);
+        await dbRunAsync('COMMIT');
+        transactionOpen = false;
+        res.json({ success: true, created, linkedLegacy, customer });
+    } catch (err) {
+        if (transactionOpen) {
+            try { await dbRunAsync('ROLLBACK'); } catch (rollbackErr) { console.error('[customer session rollback]', rollbackErr.message); }
+        }
+        if (err && err.status) return res.status(err.status).json({ error: err.message });
+        if (String(err && err.message || '').includes('UNIQUE')) return res.status(409).json({ error: 'This customer identity is already linked' });
+        serverError(res, err);
+    }
 });
 
 // Password Recovery - Request Reset (Forgot Password)
@@ -1824,35 +2364,57 @@ app.post('/api/customer/reset-password', requireCustomerAccountsEnabled, registe
 });
 
 app.get('/api/customer/me', authenticateCustomer, (req, res) => {
-    db.get(`SELECT id, email, phone, name, created_at, last_login_at FROM customer_accounts WHERE id = ?`, [req.customer.cid], (err, row) => {
-        if (err) return serverError(res, err);
-        if (!row) return res.status(404).json({ error: 'Account not found' });
-        res.json(row);
-    });
+    res.json({ id: req.customer.id, email: req.customer.email, phone: req.customer.phone, name: req.customer.name, created_at: req.customer.created_at, last_login_at: req.customer.last_login_at });
 });
 
-app.put('/api/customer/me', authenticateCustomer, (req, res) => {
-    const { name, phone } = req.body || {};
-    db.run(`UPDATE customer_accounts SET name = COALESCE(?, name), phone = COALESCE(?, phone) WHERE id = ?`,
-        [name || null, phone || null, req.customer.cid],
-        function(err) {
-            if (err) return serverError(res, err);
-            res.json({ success: true });
-        }
-    );
+app.put('/api/customer/me', authenticateCustomer, async (req, res) => {
+    const name = String((req.body && req.body.name) || '').trim();
+    const phone = String((req.body && req.body.phone) || '').trim();
+    if (name.length < 2 || name.length > 100) return res.status(400).json({ error: 'Name must be between 2 and 100 characters' });
+    if (phone.length > 30) return res.status(400).json({ error: 'Phone number is too long' });
+    try {
+        await dbRunAsync(`UPDATE customer_accounts SET name = ?, phone = ? WHERE id = ?`, [name, phone || null, req.customer.cid]);
+        const customer = await dbGetAsync(`SELECT id, email, phone, name, created_at, last_login_at FROM customer_accounts WHERE id = ?`, [req.customer.cid]);
+        res.json({ success: true, customer });
+    } catch (err) { serverError(res, err); }
 });
 
-// Customer's own order history (matched by phone OR by explicit links)
-app.get('/api/customer/orders', authenticateCustomer, (req, res) => {
-    db.get(`SELECT phone FROM customer_accounts WHERE id = ?`, [req.customer.cid], (err, acct) => {
-        if (err) return serverError(res, err);
-        const phone = acct && acct.phone ? acct.phone : null;
-        if (!phone) return res.json([]);
-        db.all(`SELECT * FROM orders WHERE customer_phone = ? ORDER BY created_at DESC`, [phone], (err, rows) => {
-            if (err) return serverError(res, err);
-            res.json(rows || []);
+// Customer's own order history uses explicit account ownership only.
+app.get('/api/customer/orders', authenticateCustomer, async (req, res) => {
+    try {
+        const rows = await dbAllAsync(
+            `SELECT o.*, oi.id AS item_id, oi.product_id, oi.product_name, oi.quantity, oi.price_at_time,
+                    (SELECT payment_method FROM payments WHERE order_id = o.id ORDER BY id DESC LIMIT 1) AS payment_method,
+                    (SELECT status FROM payments WHERE order_id = o.id ORDER BY id DESC LIMIT 1) AS payment_status,
+                    (SELECT provider_reference FROM payments WHERE order_id = o.id ORDER BY id DESC LIMIT 1) AS payment_reference,
+                    (SELECT channel FROM payments WHERE order_id = o.id ORDER BY id DESC LIMIT 1) AS payment_channel
+               FROM orders o LEFT JOIN order_items oi ON oi.order_id = o.id
+              WHERE o.customer_account_id = ? ORDER BY o.created_at DESC, oi.id ASC`,
+            [req.customer.cid]
+        );
+        const byId = new Map();
+        rows.forEach((row) => {
+            if (!byId.has(row.id)) {
+                byId.set(row.id, {
+                    id: row.id, order_number: row.order_number, customer_name: row.customer_name,
+                    customer_phone: row.customer_phone, order_type: row.order_type,
+                    total_amount: Number(row.total_amount || 0), status: row.status || 'pending',
+                    customer_email: row.customer_email, delivery_area: row.delivery_area,
+                    delivery_address_line1: row.delivery_address_line1, delivery_address_line2: row.delivery_address_line2,
+                    delivery_city: row.delivery_city, delivery_region: row.delivery_region,
+                    delivery_landmark: row.delivery_landmark, notes: row.notes,
+                    payment_method: row.payment_method, payment_status: row.payment_status,
+                    payment_reference: row.payment_reference, payment_channel: row.payment_channel,
+                    created_at: row.created_at, items: []
+                });
+            }
+            if (row.item_id) byId.get(row.id).items.push({
+                id: row.item_id, product_id: row.product_id, product_name: row.product_name,
+                quantity: Number(row.quantity || 0), price_at_time: Number(row.price_at_time || 0)
+            });
         });
-    });
+        res.json(Array.from(byId.values()));
+    } catch (err) { serverError(res, err); }
 });
 
 // ---- Customer addresses ----
@@ -1864,7 +2426,10 @@ app.get('/api/customer/addresses', authenticateCustomer, (req, res) => {
 });
 app.post('/api/customer/addresses', authenticateCustomer, (req, res) => {
     const a = req.body || {};
-    if (!a.address_line1) return res.status(400).json({ error: 'address_line1 required' });
+    if (!String(a.address_line1 || '').trim()) return res.status(400).json({ error: 'Address line is required' });
+    if (String(a.address_line1).length > 200 || String(a.address_line2 || '').length > 200 || String(a.city || '').length > 100 || String(a.region || '').length > 100) {
+        return res.status(400).json({ error: 'Address details are too long' });
+    }
     const setDefault = a.is_default ? 1 : 0;
     const insert = () => {
         db.run(
@@ -1883,6 +2448,10 @@ app.post('/api/customer/addresses', authenticateCustomer, (req, res) => {
 app.put('/api/customer/addresses/:id', authenticateCustomer, (req, res) => {
     const a = req.body || {};
     const id = req.params.id;
+    if (!/^\d+$/.test(String(id))) return res.status(400).json({ error: 'Invalid address id' });
+    if (String(a.address_line1 || '').length > 200 || String(a.address_line2 || '').length > 200 || String(a.city || '').length > 100 || String(a.region || '').length > 100) {
+        return res.status(400).json({ error: 'Address details are too long' });
+    }
     const setDefault = a.is_default ? 1 : 0;
     const update = () => {
         db.run(
@@ -1979,7 +2548,7 @@ app.get('/api/products/reviews-summary', (req, res) => {
     );
 });
 
-app.post('/api/products/:id/reviews', reviewLimiter, (req, res) => {
+app.post('/api/products/:id/reviews', reviewLimiter, optionalCustomer, (req, res) => {
     const { rating, title, body, author_name } = req.body || {};
     const productId = req.params.id;
     const r = Number(rating);
@@ -1990,33 +2559,27 @@ app.post('/api/products/:id/reviews', reviewLimiter, (req, res) => {
     if (author_name && String(author_name).length > 80) return res.status(400).json({ error: 'Name is too long (max 80 characters)' });
 
     // Optional customer auth — if a customer token is present, attribute it.
-    let customer_id = null;
-    let resolvedAuthor = (author_name || '').trim();
-    const tryAttribute = (cb) => {
-        const authHeader = req.headers['authorization'];
-        const token = authHeader && authHeader.split(' ')[1];
-        if (!token) return cb();
-        jwt.verify(token, JWT_SECRET, (err, decoded) => {
-            if (!err && decoded && decoded.kind === 'customer') {
-                customer_id = decoded.cid;
-                db.get(`SELECT name FROM customer_accounts WHERE id = ?`, [customer_id], (e, row) => {
-                    if (row && row.name) resolvedAuthor = resolvedAuthor || row.name;
-                    cb();
-                });
-            } else { cb(); }
-        });
-    };
-    tryAttribute(() => {
-        if (!resolvedAuthor) resolvedAuthor = 'Anonymous';
-        db.run(
-            `INSERT INTO product_reviews (product_id, customer_id, author_name, rating, title, body) VALUES (?, ?, ?, ?, ?, ?)`,
-            [productId, customer_id, resolvedAuthor, r, title || null, String(body).trim()],
-            function(err) {
-                if (err) return serverError(res, err);
-                res.json({ success: true, id: this.lastID });
-            }
-        );
-    });
+    const customerId = req.customer ? req.customer.cid : null;
+    const resolvedAuthor = (req.customer && req.customer.name) || String(author_name || '').trim() || 'Anonymous';
+    db.run(
+        `INSERT INTO product_reviews (product_id, customer_id, author_name, rating, title, body) VALUES (?, ?, ?, ?, ?, ?)`,
+        [productId, customerId, resolvedAuthor, r, title || null, String(body).trim()],
+        function(err) {
+            if (err) return serverError(res, err);
+            res.json({ success: true, id: this.lastID });
+        }
+    );
+});
+
+app.get('/api/customer/reviews', authenticateCustomer, (req, res) => {
+    db.all(
+        `SELECT pr.id, pr.product_id, pr.rating, pr.title, pr.body, pr.status, pr.created_at,
+                p.name AS product_name, p.img AS product_image, p.cat AS product_category
+           FROM product_reviews pr LEFT JOIN products p ON p.id = pr.product_id
+          WHERE pr.customer_id = ? ORDER BY pr.created_at DESC`,
+        [req.customer.cid],
+        (err, rows) => err ? serverError(res, err) : res.json(rows || [])
+    );
 });
 
 // Admin moderation
@@ -2051,11 +2614,40 @@ app.get('/api/wishlist', authenticateCustomer, (req, res) => {
 });
 app.post('/api/wishlist', authenticateCustomer, (req, res) => {
     const { product_id } = req.body || {};
-    if (!product_id) return res.status(400).json({ error: 'product_id required' });
-    db.run(`INSERT OR IGNORE INTO wishlist_items (customer_id, product_id) VALUES (?, ?)`, [req.customer.cid, product_id], function(err) {
+    const productId = Number(product_id);
+    if (!Number.isInteger(productId) || productId < 1) return res.status(400).json({ error: 'A valid product_id is required' });
+    db.run(`INSERT OR IGNORE INTO wishlist_items (customer_id, product_id) VALUES (?, ?)`, [req.customer.cid, productId], function(err) {
         if (err) return serverError(res, err);
         res.json({ success: true, added: this.changes > 0 });
     });
+});
+
+app.post('/api/wishlist/merge', authenticateCustomer, async (req, res) => {
+    const rawIds = req.body && req.body.productIds;
+    if (!Array.isArray(rawIds)) return res.status(400).json({ error: 'productIds must be an array' });
+    const productIds = Array.from(new Set(rawIds.map(Number)));
+    if (productIds.length > 500 || productIds.some((id) => !Number.isInteger(id) || id < 1)) {
+        return res.status(400).json({ error: 'productIds must contain at most 500 valid product ids' });
+    }
+    try {
+        if (productIds.length) {
+            const placeholders = productIds.map(() => '?').join(',');
+            const existing = await dbAllAsync(`SELECT id FROM products WHERE id IN (${placeholders})`, productIds);
+            if (existing.length !== productIds.length) return res.status(400).json({ error: 'One or more wishlist products do not exist' });
+        }
+        await dbRunAsync('BEGIN IMMEDIATE');
+        try {
+            for (const productId of productIds) {
+                await dbRunAsync(`INSERT OR IGNORE INTO wishlist_items (customer_id, product_id) VALUES (?, ?)`, [req.customer.cid, productId]);
+            }
+            await dbRunAsync('COMMIT');
+        } catch (err) {
+            await dbRunAsync('ROLLBACK');
+            throw err;
+        }
+        const rows = await dbAllAsync(`SELECT product_id FROM wishlist_items WHERE customer_id = ? ORDER BY created_at DESC`, [req.customer.cid]);
+        res.json({ success: true, productIds: rows.map((row) => Number(row.product_id)) });
+    } catch (err) { serverError(res, err); }
 });
 app.delete('/api/wishlist/:productId', authenticateCustomer, (req, res) => {
     db.run(`DELETE FROM wishlist_items WHERE customer_id = ? AND product_id = ?`, [req.customer.cid, req.params.productId], function(err) {
@@ -2265,6 +2857,96 @@ app.post('/api/products/bulk-import', authenticateToken, requireManager, (req, r
 });
 
 // ===========================================================================
+//   PRODUCT IMAGE HEALTH + TRANSACTIONAL BULK MAPPING (manager only)
+// ===========================================================================
+const SERVER_ISSUED_IMAGE_RE = /^images\/product_upload_\d+_\d+\.(?:jpg|jpeg|png|webp)$/i;
+
+app.get('/api/products/image-health', authenticateToken, requireManager, (req, res) => {
+    const fs = require('fs');
+    const imagesDir = path.join(__dirname, '..', 'images');
+    db.all(`SELECT id, name, sku, img FROM products ORDER BY id`, [], (err, products) => {
+        if (err) return serverError(res, err);
+        db.all(`SELECT image_url FROM product_images`, [], (err2, galleryRows) => {
+            if (err2) return serverError(res, err2);
+            const placeholderRe = /(^|\/)placeholder\.(?:svg|png|jpe?g|webp)$/i;
+            const categoryArtworkRe = /^images\/category-fallbacks\/(?:newborn|clothing|shoes|feeding|gear|bathcare|essentials|accessories|bedding)\.webp$/i;
+            const knownLogoPlaceholderRe = /(^|\/)product_(?:1|5\d|6\d|7\d|8[0-3])\.jpg$/i;
+            const safeImageRe = /^images\/[a-zA-Z0-9_./-]+$/;
+            const missingImages = [];
+            const missingSkus = [];
+            const invalidPaths = [];
+            const skuCounts = new Map();
+            const used = new Set();
+            (products || []).forEach((product) => {
+                const img = String(product.img || '').replace(/\\/g, '/');
+                const sku = String(product.sku || '').trim();
+                if (!img || placeholderRe.test(img) || categoryArtworkRe.test(img) || knownLogoPlaceholderRe.test(img)) missingImages.push({ id: product.id, name: product.name });
+                if (!sku) missingSkus.push({ id: product.id, name: product.name });
+                else skuCounts.set(sku, (skuCounts.get(sku) || 0) + 1);
+                if (img) used.add(img);
+                if (img && !placeholderRe.test(img)) {
+                    const absolute = safeImageRe.test(img) ? path.join(__dirname, '..', ...img.split('/')) : '';
+                    if (!absolute || !absolute.startsWith(imagesDir) || !fs.existsSync(absolute)) invalidPaths.push({ id: product.id, img });
+                }
+            });
+            (galleryRows || []).forEach((row) => { if (row.image_url) used.add(String(row.image_url).replace(/\\/g, '/')); });
+            const duplicateSkus = Array.from(skuCounts.entries()).filter((entry) => entry[1] > 1).map((entry) => ({ sku: entry[0], count: entry[1] }));
+            let uploadFiles;
+            try { uploadFiles = fs.readdirSync(imagesDir).filter((name) => /^product_upload_/i.test(name)); } catch (e) { uploadFiles = []; }
+            const unusedUploads = uploadFiles.map((name) => 'images/' + name).filter((img) => !used.has(img));
+            res.json({ missingImages, missingSkus, duplicateSkus, invalidPaths, unusedUploads });
+        });
+    });
+});
+
+app.post('/api/products/bulk-images', authenticateToken, requireManager, (req, res) => {
+    const fs = require('fs');
+    const items = req.body && req.body.items;
+    if (!Array.isArray(items) || items.length === 0 || items.length > 500) return res.status(400).json({ error: 'items must be a non-empty array (max 500)' });
+    const ids = [];
+    const paths = new Set();
+    for (const item of items) {
+        const id = Number(item && item.id);
+        const img = String(item && item.img || '').replace(/\\/g, '/');
+        if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Every item needs a valid positive product id' });
+        if (ids.includes(id)) return res.status(400).json({ error: 'Duplicate product id: ' + id });
+        if (paths.has(img)) return res.status(400).json({ error: 'Duplicate image path: ' + img });
+        if (!SERVER_ISSUED_IMAGE_RE.test(img)) return res.status(400).json({ error: 'Unsafe or non-server-issued image path' });
+        const absolute = path.join(__dirname, '..', ...img.split('/'));
+        if (!fs.existsSync(absolute)) return res.status(400).json({ error: 'Uploaded image file does not exist: ' + img });
+        ids.push(id); paths.add(img);
+    }
+    const placeholders = ids.map(() => '?').join(',');
+    db.all(`SELECT id FROM products WHERE id IN (${placeholders})`, ids, (err, rows) => {
+        if (err) return serverError(res, err);
+        const found = new Set((rows || []).map((row) => Number(row.id)));
+        const unknown = ids.filter((id) => !found.has(id));
+        if (unknown.length) return res.status(404).json({ error: 'Unknown product id(s): ' + unknown.join(', ') });
+        db.run('BEGIN IMMEDIATE TRANSACTION', (beginErr) => {
+            if (beginErr) return serverError(res, beginErr);
+            const updateNext = (index) => {
+                if (index >= items.length) {
+                    return db.run('COMMIT', (commitErr) => {
+                        if (commitErr) return db.run('ROLLBACK', () => serverError(res, commitErr));
+                        res.json({ success: true, updated: items.length });
+                    });
+                }
+                db.run(`UPDATE products SET img = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`, [items[index].img, Number(items[index].id)], function(updateErr) {
+                    if (updateErr || this.changes !== 1) {
+                        return db.run('ROLLBACK', () => {
+                            if (updateErr) return serverError(res, updateErr);
+                            res.status(409).json({ error: 'Bulk mapping changed no rows; transaction rolled back' });
+                        });
+                    }
+                    updateNext(index + 1);
+                });
+            };
+            updateNext(0);
+        });
+    });
+});
+
+// ===========================================================================
 //   PRODUCT IMAGE UPLOAD (manager only)
 //   Accepts a base64 data-URI (already resized/compressed in the browser),
 //   writes it to /images as a real file, returns the path. This is the ONLY
@@ -2322,3 +3004,5 @@ if (typeof db.whenReady === 'function') {
 } else {
     app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
 }
+
+module.exports = app;

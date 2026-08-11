@@ -1,6 +1,6 @@
 # DC Kids Brand — Deployment Guide
 
-The app is a single Node/Express process that serves both the static frontend
+The app is a single Node 22.13+ / Express process that serves both the static frontend
 (project root) and the JSON API under `/api`. The frontend talks to the backend
 via the relative path `/api`, so no host/URL configuration is needed — it works
 on whatever domain you deploy to.
@@ -49,6 +49,10 @@ is up to your host:
 | `PORT` | no | Listening port (default 3000). Most hosts inject this automatically. |
 | `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` | no | Optional instant order alerts. `TELEGRAM_CHAT_ID` accepts **one or more** comma-separated destinations — each can be a personal chat id or a shared channel/group id. To add the new owner, append their id (e.g. `111111111,222222222`); every destination receives each order. For a channel, add the bot as an admin and use the channel id. |
 | `SHOP_NOTIFY_EMAIL`, `SMTP_*` | no | Optional transactional email. |
+| `FIREBASE_API_KEY`, `FIREBASE_AUTH_DOMAIN`, `FIREBASE_PROJECT_ID`, `FIREBASE_APP_ID` | **yes** | Public Firebase web-app configuration used by the customer account page. |
+| `GOOGLE_APPLICATION_CREDENTIALS` | production* | Path to a Firebase service-account JSON file stored outside Git. Omit when the host supplies Application Default Credentials or workload identity. |
+| `PAYSTACK_SECRET_KEY` | direct payments | Server-only Paystack test/live secret. Never expose it to browser code or Git. |
+| `PAYSTACK_LEGACY_WEBHOOK_URL` | shared Paystack integration | Existing app's webhook. DC Kids forwards every valid non-`DCK-` event to this fixed URL. |
 
 ## 3. First admin account (passwordless)
 
@@ -69,7 +73,31 @@ code printed to the server log). The first owner is claimed like this:
 - **Recovery codes** are the backup sign-in if email is ever unavailable; each
   works once.
 
-## 4. Data & backups
+## 4. Firebase customer authentication
+
+Customer accounts use Firebase Authentication; the existing admin Google/OTP/recovery-code system remains separate.
+
+1. Create a Firebase project and register a **Web app** for DC Kids.
+2. In **Authentication > Sign-in method**, enable **Email/Password** and **Google**.
+3. In **Authentication > Settings > Authorized domains**, add `localhost` plus every production hostname that serves the store.
+4. Configure the verification-email and password-reset templates with the store name and production continue URL.
+5. Set the Firebase password policy to require at least **8 characters**. The app also enforces this minimum before registration.
+6. Copy the web app's `apiKey`, `authDomain`, `projectId`, and `appId` into the matching environment variables above.
+7. Give the Node server Firebase Admin credentials through Application Default Credentials. If using a service-account JSON file, store it outside the repository and set `GOOGLE_APPLICATION_CREDENTIALS` to its absolute path.
+
+Restart the server after changing configuration. `GET /api/customer/auth/config` intentionally exposes only the four public web fields. Customer profile, orders, addresses, wishlist, and reviews require a verified Firebase email and a valid bearer ID token.
+
+## 5. Paystack direct checkout
+
+1. Configure `PAYSTACK_SECRET_KEY` with a test secret and set `PAYSTACK_LEGACY_WEBHOOK_URL` to the other app's current webhook.
+2. Deploy DC Kids over HTTPS, then set the Paystack test webhook to `https://dckidsbrand.com/api/payments/paystack/webhook`.
+3. Complete one `DCK-` test transaction and one transaction from the existing app. Confirm the first becomes paid in DC Kids and the second reaches the legacy webhook unchanged.
+4. Configure `SHOP_NOTIFY_EMAIL`, `RESEND_API_KEY`, and a verified `RESEND_FROM` so paid-order details reach the owner.
+5. Only after both test paths pass, switch to the live secret and live webhook. Paystack charges products only; delivery is confirmed separately.
+
+The callback page is not payment authority. Signed Paystack webhooks and server-side verification update orders. Direct checkout remains hidden while the secret is absent.
+
+## 6. Data & backups
 
 - SQLite database lives at `server/inventory.db` (plus `-wal`/`-shm` sidecars).
 - It is **gitignored** — it holds customer/order data and must not be committed.
@@ -77,7 +105,7 @@ code printed to the server log). The first owner is claimed like this:
   wiped, the catalogue re-seeds and a new admin account is created.
 - `node server/backup_db.js` writes a backup copy.
 
-## 5. Production checklist
+## 7. Production checklist
 
 - [ ] `NODE_ENV=production` set on the host
 - [ ] `JWT_SECRET` is a fresh long random value
@@ -87,8 +115,18 @@ code printed to the server log). The first owner is claimed like this:
 - [ ] `APP_URL` set to your public URL (used in emails)
 - [ ] `server/inventory.db` on persistent storage
 - [ ] Served over HTTPS (required for the PWA service worker and HSTS)
+- [ ] Production runtime is Node 22.13 or newer
+- [ ] Firebase Email/Password and Google providers enabled
+- [ ] Firebase authorized domains include localhost and every production hostname
+- [ ] Firebase verification/reset templates and 8-character password policy configured
+- [ ] All four `FIREBASE_*` public values set
+- [ ] Firebase Admin uses ADC/workload identity or an external service-account file
+- [ ] Paystack test checkout and `DCK-` webhook processing verified
+- [ ] Non-`DCK-` webhook forwarding verified against the existing app
+- [ ] Live Paystack secret and webhook configured only after test-mode sign-off
+- [ ] `SHOP_NOTIFY_EMAIL` receives an itemised paid-order message
 
-## 6. Google Sign-In setup (optional but recommended)
+## 8. Admin Google Sign-In setup (optional but recommended)
 
 "Continue with Google" is the fastest everyday login. It replaces the OTP *step*
 but keeps the same approve/reject gate — Google proves identity, your `users`

@@ -2,6 +2,194 @@ const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
 
 const dbPath = process.env.DB_PATH || path.resolve(__dirname, 'inventory.db');
+const SKU_PREFIXES = { clothing: 'CLO', shoes: 'SHO', accessories: 'ACC', newborn: 'NEW', bedding: 'BED', essentials: 'ESS', feeding: 'FEE', gear: 'GEA', bathcare: 'BAT' };
+const CATEGORY_IMAGES = { clothing: 'images/category-fallbacks/clothing.webp', shoes: 'images/category-fallbacks/shoes.webp', accessories: 'images/category-fallbacks/accessories.webp', newborn: 'images/category-fallbacks/newborn.webp', bedding: 'images/category-fallbacks/bedding.webp', essentials: 'images/category-fallbacks/essentials.webp', feeding: 'images/category-fallbacks/feeding.webp', gear: 'images/category-fallbacks/gear.webp', bathcare: 'images/category-fallbacks/bathcare.webp' };
+function skuPrefixForCategory(cat) {
+    return SKU_PREFIXES[String(cat || '').toLowerCase()] || (String(cat || 'GEN').replace(/[^a-zA-Z]/g, '').slice(0, 3).toUpperCase() || 'GEN');
+}
+function backfillMissingProductSkus(done) {
+    db.all(`SELECT id, sku, cat FROM products ORDER BY id`, [], (err, rows) => {
+        if (err) { console.error('SKU backfill read failed:', err.message); return done(); }
+        const used = new Set((rows || []).map((row) => String(row.sku || '').trim()).filter(Boolean));
+        const nextByPrefix = {};
+        const updates = [];
+        (rows || []).forEach((row) => {
+            if (String(row.sku || '').trim()) return;
+            const prefix = skuPrefixForCategory(row.cat);
+            let number = nextByPrefix[prefix] || 1;
+            let sku = prefix + '-' + String(number).padStart(4, '0');
+            while (used.has(sku)) { number++; sku = prefix + '-' + String(number).padStart(4, '0'); }
+            nextByPrefix[prefix] = number + 1;
+            used.add(sku);
+            updates.push({ id: row.id, sku });
+        });
+        if (!updates.length) return done();
+        const stmt = db.prepare(`UPDATE products SET sku = ? WHERE id = ? AND (sku IS NULL OR trim(sku) = '')`);
+        updates.forEach((item) => stmt.run(item.sku, item.id));
+        stmt.finalize((finalizeErr) => {
+            if (finalizeErr) console.error('SKU backfill failed:', finalizeErr.message);
+            else console.log(`SKU backfill: assigned ${updates.length} missing SKU(s).`);
+            done();
+        });
+    });
+}
+
+function backfillCategoryArtwork(done) {
+    const normalizedImageSql = `lower(replace(img, '\\', '/'))`;
+    const missingImageSql = `(img IS NULL OR trim(img) = '' OR ${normalizedImageSql} IN ('images/placeholder.svg', 'images/placeholder.png', 'images/product_1.jpg') OR ${normalizedImageSql} GLOB 'images/product_[5-7][0-9].jpg' OR ${normalizedImageSql} GLOB 'images/product_8[0-3].jpg')`;
+    const entries = Object.entries(CATEGORY_IMAGES);
+    let pending = entries.length;
+    let updated = 0;
+    entries.forEach(([category, image]) => {
+        db.run(`UPDATE products SET img = ? WHERE lower(cat) = ? AND ${missingImageSql}`, [image, category], function (err) {
+            if (err) console.error(`Category artwork backfill (${category}) failed:`, err.message);
+            else updated += this.changes || 0;
+            pending--;
+            if (!pending) {
+                if (updated) console.log(`Category artwork backfill: assigned ${updated} product image(s).`);
+                done();
+            }
+        });
+    });
+}
+
+// Firebase customer-auth migration. Older databases stored a mandatory local
+// password hash and linked orders to accounts indirectly by phone. Firebase is
+// now the identity authority, so password_hash becomes nullable, firebase_uid
+// is unique, and new orders carry an explicit account foreign key. Run this as
+// the final schema barrier so a partially migrated database is never served.
+function migrateCustomerAuthSchema(done) {
+    const finishOrders = () => {
+        db.all('PRAGMA table_info(orders)', [], (ordersErr, orderColumns) => {
+            if (ordersErr) {
+                console.error('Customer auth migration (orders read) failed:', ordersErr.message);
+                return done();
+            }
+            const hasCustomerAccountId = (orderColumns || []).some((column) => column.name === 'customer_account_id');
+            const finish = () => {
+                db.run('CREATE INDEX IF NOT EXISTS idx_orders_customer_account ON orders (customer_account_id)', (indexErr) => {
+                    if (indexErr) console.error('Customer auth migration (orders index) failed:', indexErr.message);
+                    done();
+                });
+            };
+            if (hasCustomerAccountId) return finish();
+            db.run('ALTER TABLE orders ADD COLUMN customer_account_id INTEGER REFERENCES customer_accounts(id)', (alterErr) => {
+                if (alterErr) console.error('Customer auth migration (orders.customer_account_id) failed:', alterErr.message);
+                else console.log('Migration: added orders.customer_account_id');
+                finish();
+            });
+        });
+    };
+
+    db.all('PRAGMA table_info(customer_accounts)', [], (err, columns) => {
+        if (err) {
+            console.error('Customer auth migration (account read) failed:', err.message);
+            return finishOrders();
+        }
+        const names = (columns || []).map((column) => column.name);
+        const passwordColumn = (columns || []).find((column) => column.name === 'password_hash');
+        const passwordMustBePresent = !!(passwordColumn && passwordColumn.notnull);
+        const hasFirebaseUid = names.includes('firebase_uid');
+
+        const ensureFirebaseIndex = () => {
+            db.run('CREATE UNIQUE INDEX IF NOT EXISTS idx_customer_accounts_firebase_uid ON customer_accounts (firebase_uid)', (indexErr) => {
+                if (indexErr) console.error('Customer auth migration (firebase uid index) failed:', indexErr.message);
+                finishOrders();
+            });
+        };
+
+        if (!passwordMustBePresent) {
+            if (hasFirebaseUid) return ensureFirebaseIndex();
+            return db.run('ALTER TABLE customer_accounts ADD COLUMN firebase_uid TEXT', (alterErr) => {
+                if (alterErr) console.error('Customer auth migration (customer_accounts.firebase_uid) failed:', alterErr.message);
+                else console.log('Migration: added customer_accounts.firebase_uid');
+                ensureFirebaseIndex();
+            });
+        }
+
+        const firebaseSelect = hasFirebaseUid ? 'firebase_uid' : 'NULL';
+        db.exec(`
+            PRAGMA foreign_keys = OFF;
+            BEGIN IMMEDIATE;
+            DROP TABLE IF EXISTS customer_accounts_firebase_migration;
+            CREATE TABLE customer_accounts_firebase_migration (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                email TEXT UNIQUE NOT NULL,
+                phone TEXT,
+                name TEXT,
+                password_hash TEXT,
+                firebase_uid TEXT UNIQUE,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                last_login_at DATETIME
+            );
+            INSERT INTO customer_accounts_firebase_migration
+                (id, email, phone, name, password_hash, firebase_uid, created_at, last_login_at)
+            SELECT id, email, phone, name, password_hash, ${firebaseSelect}, created_at, last_login_at
+              FROM customer_accounts;
+            DROP TABLE customer_accounts;
+            ALTER TABLE customer_accounts_firebase_migration RENAME TO customer_accounts;
+            COMMIT;
+            PRAGMA foreign_keys = ON;
+        `, (migrationErr) => {
+            if (migrationErr) console.error('Customer auth migration (nullable password) failed:', migrationErr.message);
+            else console.log('Migration: customer accounts now use nullable legacy passwords and Firebase UIDs');
+            ensureFirebaseIndex();
+        });
+    });
+}
+
+// Paystack/direct-checkout migration. Keep this additive so existing WhatsApp
+// orders and analytics rows remain intact on long-lived production databases.
+function migrateCommerceSchema(done) {
+    const ensureColumns = (table, definitions, callback) => {
+        db.all(`PRAGMA table_info(${table})`, [], (err, columns) => {
+            if (err) {
+                console.error(`Commerce migration (${table} read) failed:`, err.message);
+                return callback();
+            }
+            const existing = new Set((columns || []).map((column) => column.name));
+            const pending = definitions.filter(([name]) => !existing.has(name));
+            const addNext = () => {
+                const next = pending.shift();
+                if (!next) return callback();
+                db.run(`ALTER TABLE ${table} ADD COLUMN ${next[1]}`, (alterErr) => {
+                    if (alterErr) console.error(`Commerce migration (${table}.${next[0]}) failed:`, alterErr.message);
+                    else console.log(`Migration: added ${table}.${next[0]}`);
+                    addNext();
+                });
+            };
+            addNext();
+        });
+    };
+
+    ensureColumns('orders', [
+        ['customer_email', 'customer_email TEXT'],
+        ['delivery_address_line1', 'delivery_address_line1 TEXT'],
+        ['delivery_address_line2', 'delivery_address_line2 TEXT'],
+        ['delivery_city', 'delivery_city TEXT'],
+        ['delivery_region', 'delivery_region TEXT'],
+        ['delivery_landmark', 'delivery_landmark TEXT']
+    ], () => ensureColumns('payments', [
+        ['provider', 'provider TEXT'],
+        ['provider_reference', 'provider_reference TEXT'],
+        ['provider_transaction_id', 'provider_transaction_id TEXT'],
+        ['currency', "currency TEXT DEFAULT 'GHS'"],
+        ['channel', 'channel TEXT'],
+        ['gateway_response', 'gateway_response TEXT'],
+        ['paid_at', 'paid_at DATETIME'],
+        ['updated_at', 'updated_at DATETIME DEFAULT CURRENT_TIMESTAMP'],
+        ['owner_notified_at', 'owner_notified_at DATETIME']
+    ], () => {
+        db.run('CREATE UNIQUE INDEX IF NOT EXISTS idx_payments_provider_reference ON payments (provider_reference)', (referenceErr) => {
+            if (referenceErr) console.error('Commerce migration (payment reference index) failed:', referenceErr.message);
+            db.run('CREATE UNIQUE INDEX IF NOT EXISTS idx_payments_provider_transaction ON payments (provider_transaction_id)', (transactionErr) => {
+                if (transactionErr) console.error('Commerce migration (payment transaction index) failed:', transactionErr.message);
+                done();
+            });
+        });
+    }));
+}
+
 const db = new sqlite3.Database(dbPath, (err) => {
     if (err) {
         console.error('Error opening database', err.message);
@@ -462,8 +650,16 @@ const db = new sqlite3.Database(dbPath, (err) => {
             status TEXT,
             delivery_area TEXT,
             notes TEXT,
+            customer_email TEXT,
+            delivery_address_line1 TEXT,
+            delivery_address_line2 TEXT,
+            delivery_city TEXT,
+            delivery_region TEXT,
+            delivery_landmark TEXT,
+            customer_account_id INTEGER,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (customer_account_id) REFERENCES customer_accounts (id)
         )`, (err) => {
             if (err) console.error("Error creating orders table", err);
 
@@ -506,6 +702,15 @@ const db = new sqlite3.Database(dbPath, (err) => {
             payment_method TEXT NOT NULL DEFAULT 'Mobile Money',
             amount REAL NOT NULL DEFAULT 0,
             status TEXT NOT NULL DEFAULT 'pending',
+            provider TEXT,
+            provider_reference TEXT,
+            provider_transaction_id TEXT,
+            currency TEXT DEFAULT 'GHS',
+            channel TEXT,
+            gateway_response TEXT,
+            paid_at DATETIME,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            owner_notified_at DATETIME,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (order_id) REFERENCES orders (id)
         )`, (err) => {
@@ -554,7 +759,8 @@ const db = new sqlite3.Database(dbPath, (err) => {
             email TEXT UNIQUE NOT NULL,
             phone TEXT,
             name TEXT,
-            password_hash TEXT NOT NULL,
+            password_hash TEXT,
+            firebase_uid TEXT UNIQUE,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             last_login_at DATETIME
         )`, (err) => { if (err) console.error("Error creating customer_accounts table", err); });
@@ -603,8 +809,7 @@ const db = new sqlite3.Database(dbPath, (err) => {
             FOREIGN KEY (product_id) REFERENCES products (id)
         )`, (err) => { if (err) console.error("Error creating wishlist_items table", err); });
 
-        // Link a server-side customer account to existing orders by phone match.
-        // We don't ALTER orders schema — instead resolve via phone lookup at query time.
+        // Legacy orders are linked once during verified-email Firebase migration.
 
         // Indexes for the lookups that run on every page/admin load. Keep these
         // fast as rows grow into the tens/hundreds of thousands.
@@ -633,7 +838,13 @@ const db = new sqlite3.Database(dbPath, (err) => {
         // so it's a reliable "schema ready" signal. The server waits on this via
         // db.whenReady() before listening — otherwise a request arriving on a
         // fresh database (no tables yet) crashes with "no such table: orders".
-        db.run('SELECT 1', () => { _markDbReady(); });
+        // A second queue barrier lets dynamically queued seed statements finish,
+        // then assigns only blank SKUs before the server begins listening.
+        db.run('SELECT 1', () => {
+            db.run('SELECT 1', () => migrateCustomerAuthSchema(() => {
+                migrateCommerceSchema(() => backfillMissingProductSkus(() => backfillCategoryArtwork(_markDbReady)));
+            }));
+        });
     }
 });
 
@@ -643,5 +854,7 @@ let _dbReady = false;
 const _dbReadyCbs = [];
 function _markDbReady() { _dbReady = true; while (_dbReadyCbs.length) _dbReadyCbs.shift()(); }
 db.whenReady = function (cb) { if (_dbReady) cb(); else _dbReadyCbs.push(cb); };
+db.backfillMissingProductSkus = backfillMissingProductSkus;
+db.backfillCategoryArtwork = backfillCategoryArtwork;
 
 module.exports = db;

@@ -9,7 +9,7 @@
    - Images + fonts: cache-first.
    - Bumping VERSION wipes old caches on activate.
 */
-const VERSION = 'dckids-v128';
+const VERSION = 'dckids-v132';
 const STATIC_CACHE = 'dckids-static-' + VERSION;
 const RUNTIME_CACHE = 'dckids-runtime-' + VERSION;
 
@@ -19,9 +19,27 @@ const RUNTIME_CACHE = 'dckids-runtime-' + VERSION;
 const APP_SHELL = [
   '/index.html',
   '/admin.html',
+  '/account.html',
+  '/payment-result.html',
   '/styles.css',
+  '/tailwind-storefront.css',
+  '/tailwind-admin.css',
+  '/image-resolver.js',
+  '/account.js',
+  '/payment-result.js',
+  '/firebase-auth.js',
   '/manifest.json',
-  '/icon.png'
+  '/icon.png',
+  '/images/placeholder.svg',
+  '/images/category-fallbacks/newborn.webp',
+  '/images/category-fallbacks/clothing.webp',
+  '/images/category-fallbacks/shoes.webp',
+  '/images/category-fallbacks/feeding.webp',
+  '/images/category-fallbacks/gear.webp',
+  '/images/category-fallbacks/bathcare.webp',
+  '/images/category-fallbacks/essentials.webp',
+  '/images/category-fallbacks/accessories.webp',
+  '/images/category-fallbacks/bedding.webp'
 ];
 
 self.addEventListener('install', (event) => {
@@ -52,13 +70,29 @@ self.addEventListener('fetch', (event) => {
   const accept = req.headers.get('accept') || '';
   const isHtml = req.mode === 'navigate' || accept.includes('text/html') || url.pathname.endsWith('.html');
   const isApi = url.pathname.startsWith('/api/');
+  const carriesIdentity = req.headers.has('authorization');
+  const isPrivateCustomerApi = url.pathname.startsWith('/api/customer/') || url.pathname.startsWith('/api/wishlist');
+  const isPaymentApi = url.pathname.startsWith('/api/payments/') || url.pathname.startsWith('/api/checkout/paystack');
   const isCode = url.pathname.endsWith('.js') || url.pathname.endsWith('.css');
+  const isImage = req.destination === 'image' || /\.(?:png|jpe?g|gif|svg|webp|avif)$/i.test(url.pathname);
 
   // Live store config must NEVER be served from cache — always go to network so
   // admin changes (banner, discount, WhatsApp) reach shoppers immediately.
   const isLiveConfig = url.pathname === '/api/settings' || url.pathname === '/api/products';
   if (isLiveConfig) {
     event.respondWith(fetch(req).catch(() => caches.match(req)));
+    return;
+  }
+
+  // Customer/profile responses must never enter Cache Storage. Cache matching
+  // does not isolate users by Authorization header, so an offline fallback
+  // could otherwise expose the previous customer's private data on a shared
+  // device. Authenticated storefront calls (orders/reviews) follow this rule too.
+  if (isApi && (carriesIdentity || isPrivateCustomerApi || isPaymentApi)) {
+    event.respondWith(fetch(req).catch(() => new Response(
+      JSON.stringify({ error: 'Account data is unavailable while offline' }),
+      { status: 503, headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } }
+    )));
     return;
   }
 
@@ -75,7 +109,9 @@ self.addEventListener('fetch', (event) => {
         // shell. Falling back to /index.html here was bouncing the admin login
         // page to the storefront whenever the network blipped (e.g. the reload
         // right after a new SW takes control).
-        const fallback = url.pathname.startsWith('/admin') ? '/admin.html' : '/index.html';
+        const fallback = url.pathname.startsWith('/admin')
+          ? '/admin.html'
+          : (url.pathname.startsWith('/account') ? '/account.html' : '/index.html');
         return caches.match(fallback);
       }))
     );
@@ -87,12 +123,16 @@ self.addEventListener('fetch', (event) => {
     caches.match(req).then((cached) => {
       if (cached) return cached;
       return fetch(req).then((res) => {
-        if (res && res.status === 200 && res.type === 'basic') {
+        if (!res || !res.ok) {
+          if (isImage) return caches.match('/images/placeholder.svg');
+          return res;
+        }
+        if (res.type === 'basic') {
           const copy = res.clone();
           caches.open(RUNTIME_CACHE).then((c) => c.put(req, copy)).catch(() => {});
         }
         return res;
-      }).catch(() => caches.match('/index.html'));
+      }).catch(() => isImage ? caches.match('/images/placeholder.svg') : undefined);
     })
   );
 });

@@ -13,6 +13,34 @@
 let products = [];
 let searchQuery = '';
 
+// Genuine product photography stays distinct from temporary category artwork.
+// Products without genuine photography use shared category artwork. The
+// resolver keeps it visibly labelled instead of presenting it as an exact photo.
+const CATEGORY_FALLBACK_IMAGES = DCImageResolver.CATEGORY_IMAGES;
+
+function hasGenuineProductImage(img) {
+  return DCImageResolver.isGenuineImage(img);
+}
+
+function resolveProductImage(product) {
+  return DCImageResolver.resolve(product);
+}
+
+function categoryImageBadge() {
+  return '<span class="category-image-badge">Category image</span>';
+}
+
+function useCategoryFallback(img, category) {
+  if (!img || img.dataset.categoryFallbackApplied === '1') return;
+  img.dataset.categoryFallbackApplied = '1';
+  const categoryImage = CATEGORY_FALLBACK_IMAGES[String(category || '').toLowerCase()];
+  img.src = categoryImage || 'images/placeholder.svg';
+  const wrap = img.parentElement;
+  if (wrap && !wrap.querySelector('.category-image-badge') && categoryImage) {
+    wrap.insertAdjacentHTML('beforeend', categoryImageBadge());
+  }
+}
+
 // Promotional/brand images used elsewhere (not product cards):
 // product_1.jpg  = Logo
 // product_11.jpg = Xmas Discount Sales flyer
@@ -169,7 +197,8 @@ function renderCard(p, index) {
   // single-quote escape and HTML escaping; nameHtml/imgHtml cover plain markup.
   const escName = escapeStr((p.name || '').replace(/'/g, "\\'"));
   const nameHtml = escapeStr(p.name || '');
-  const imgHtml = escapeStr(p.img || '');
+  const image = resolveProductImage(p);
+  const imgHtml = escapeStr(image.src);
   let badgeHTML = '';
   let isSoldOut = false;
   if (p.stock === 0) {
@@ -306,7 +335,8 @@ function renderCard(p, index) {
   return `
     <article class="${cardClass}" data-category="${escapeStr(p.cat || '')}" data-product-id="${p.id}" style="animation-delay: ${index * 0.04}s">
       <div class="product-card__img-wrap">
-        <img class="product-card__img" src="${imgHtml}" alt="${nameHtml}" loading="lazy" onerror="this.onerror=null;this.src='images/placeholder.svg';">
+        <img class="product-card__img" src="${imgHtml}" alt="${nameHtml}" loading="lazy" onerror="useCategoryFallback(this, '${escapeStr(p.cat || '')}')">
+        ${image.isCategoryFallback ? categoryImageBadge() : ''}
         ${badgeHTML}
         ${lowStockHTML}
         <button type="button" class="wishlist-heart" data-wishlist-id="${p.id}" aria-label="Add to wishlist" onclick="toggleWishlist(event, ${p.id})">
@@ -633,6 +663,37 @@ if (closeBanner && urgencyBanner) {
 // ── Cart State & LocalStorage ──
 let cart = JSON.parse(localStorage.getItem('dcKidsCart')) || [];
 function saveCart() { localStorage.setItem('dcKidsCart', JSON.stringify(cart)); }
+const PAYSTACK_PENDING_KEY = 'dcKidsPendingPaystackCheckout';
+let paystackEnabled = false;
+
+function subtractPurchasedCart(snapshot) {
+  (snapshot || []).forEach((purchased) => {
+    const match = cart.find((item) => Number(item.id) === Number(purchased.id) && String(item.size || '') === String(purchased.size || '') && Number(item.ws || 0) === Number(purchased.ws || 0));
+    if (!match) return;
+    match.qty = Math.max(0, Number(match.qty || 0) - Number(purchased.qty || 0));
+  });
+  cart = cart.filter((item) => Number(item.qty || 0) > 0);
+  saveCart();
+  renderCartDrawer();
+}
+
+async function reconcilePendingPaystackCheckout() {
+  let pending;
+  try { pending = JSON.parse(localStorage.getItem(PAYSTACK_PENDING_KEY) || 'null'); } catch (error) { return; }
+  if (!pending || !pending.reference) return;
+  try {
+    const response = await fetch('/api/payments/paystack/status/' + encodeURIComponent(pending.reference), { cache: 'no-store' });
+    if (!response.ok) return;
+    const status = await response.json();
+    if (status.payment_status === 'paid' || status.order_status === 'paid') {
+      subtractPurchasedCart(pending.items || []);
+      localStorage.removeItem(PAYSTACK_PENDING_KEY);
+      showToast('Payment confirmed. Your purchased items were removed from the cart.', 'success');
+    } else if (['failed', 'review'].includes(status.payment_status) || ['payment_failed', 'payment_review'].includes(status.order_status)) {
+      localStorage.removeItem(PAYSTACK_PENDING_KEY);
+    }
+  } catch (error) { /* Keep the pending snapshot for the next online visit. */ }
+}
 
 // ── Cart DOM Refs ──
 const cartBtn      = document.getElementById('cartBtn');
@@ -661,7 +722,7 @@ function addToCart(id) {
   const qtyToAdd      = (isWholesale && bulkQtyEl) ? parseInt(bulkQtyEl.value) : 1;
   const existing      = cart.find(item => item.id === id && item.size === size);
   if (existing) { existing.qty += qtyToAdd; }
-  else { cart.push({ id: product.id, name: product.name, size, price: adjustedPrice, qty: qtyToAdd, img: product.img, ws: isWholesale ? 1 : 0 }); }
+  else { cart.push({ id: product.id, name: product.name, size, price: adjustedPrice, qty: qtyToAdd, img: product.img, cat: product.cat, ws: isWholesale ? 1 : 0 }); }
   saveCart(); renderCartDrawer(); openCart();
 }
 
@@ -695,9 +756,12 @@ function renderCartDrawer() {
   cart.forEach((item, index) => {
     const itemTotal = item.price * item.qty;
     subtotal += itemTotal;
+    const catalogueProduct = products.find(p => Number(p.id) === Number(item.id));
+    const itemCategory = item.cat || (catalogueProduct && catalogueProduct.cat) || '';
+    const cartImage = resolveProductImage({ img: item.img, cat: itemCategory });
     html += `
       <div class="cart-item">
-        <img src="${escapeStr(item.img || '')}" alt="${escapeStr(item.name || '')}" class="cart-item__img">
+        <div class="cart-item__img-wrap"><img src="${escapeStr(cartImage.src)}" alt="${escapeStr(item.name || '')}" class="cart-item__img" onerror="useCategoryFallback(this, '${escapeStr(itemCategory)}')">${cartImage.isCategoryFallback ? categoryImageBadge() : ''}</div>
         <div class="cart-item__details">
           <div class="cart-item__title">${escapeStr(item.name || '')}</div>
           <div class="cart-item__size">${escapeStr(item.size || '')}${item.ws ? ' · Wholesale (' + item.qty + ' pcs)' : ''}</div>
@@ -725,30 +789,69 @@ function showCheckoutModal() {
     const step2   = document.getElementById('checkoutStep2');
     const nameEl  = document.getElementById('checkoutName');
     const phoneEl = document.getElementById('checkoutPhone');
-    const areaEl  = document.getElementById('checkoutArea');
+    const emailEl = document.getElementById('checkoutEmail');
+    const line1El = document.getElementById('checkoutAddressLine1');
+    const line2El = document.getElementById('checkoutAddressLine2');
+    const cityEl = document.getElementById('checkoutCity');
+    const regionEl = document.getElementById('checkoutRegion');
+    const landmarkEl = document.getElementById('checkoutLandmark');
+    const savedAddressEl = document.getElementById('checkoutSavedAddress');
+    const savedAddressWrap = document.getElementById('checkoutSavedAddressWrap');
     const notesEl = document.getElementById('checkoutNotes');
     const cancelBtn   = document.getElementById('checkoutModalCancel');
     const okBtn       = document.getElementById('checkoutModalOk');
-    const continueBtn = document.getElementById('checkoutModalContinue');
+    const whatsappBtn = document.getElementById('checkoutWhatsAppBtn');
+    const paystackBtn = document.getElementById('checkoutPaystackBtn');
+    const paystackUnavailable = document.getElementById('checkoutPaystackUnavailable');
     let data = null;
+
+    paystackBtn.disabled = !paystackEnabled;
+    paystackBtn.setAttribute('aria-disabled', String(!paystackEnabled));
+    if (paystackUnavailable) paystackUnavailable.style.display = paystackEnabled ? 'none' : 'block';
 
     step1.style.display = 'block';
     step2.style.display = 'none';
-    nameEl.value = ''; phoneEl.value = '';
-    if (areaEl) areaEl.value = '';
+    const signedInCustomer = firebaseCustomerState.customer || {};
+    nameEl.value = signedInCustomer.name || '';
+    phoneEl.value = signedInCustomer.phone || '';
+    emailEl.value = signedInCustomer.email || (firebaseCustomerState.user && firebaseCustomerState.user.email) || '';
+    emailEl.readOnly = isSignedIn();
+    const fillAddress = (address) => {
+      const value = address || {};
+      line1El.value = value.address_line1 || '';
+      line2El.value = value.address_line2 || '';
+      cityEl.value = value.city || '';
+      regionEl.value = value.region || '';
+      landmarkEl.value = '';
+      if (value.phone && !phoneEl.value) phoneEl.value = value.phone;
+      if (value.recipient_name && !nameEl.value) nameEl.value = value.recipient_name;
+    };
+    fillAddress(firebaseDefaultAddress);
+    if (savedAddressEl && savedAddressWrap) {
+      savedAddressEl.innerHTML = '<option value="">Enter a different address</option>' + firebaseAddresses.map((address) =>
+        `<option value="${Number(address.id)}">${escapeStr(address.label || 'Saved address')} — ${escapeStr([address.address_line1, address.city].filter(Boolean).join(', '))}</option>`
+      ).join('');
+      savedAddressWrap.style.display = firebaseAddresses.length ? 'block' : 'none';
+      if (firebaseDefaultAddress) savedAddressEl.value = String(firebaseDefaultAddress.id);
+      savedAddressEl.onchange = () => fillAddress(firebaseAddresses.find((address) => String(address.id) === savedAddressEl.value));
+    }
     if (notesEl) notesEl.value = '';
     nameEl.style.borderColor = '#e0e4e8';
     phoneEl.style.borderColor = '#e0e4e8';
     closeCart();
     modal.style.display = 'flex';
     modal.style.pointerEvents = 'auto';
-    setTimeout(() => { nameEl.focus(); nameEl.click(); }, 150);
+    setTimeout(() => {
+      const firstEmpty = !nameEl.value ? nameEl : (!phoneEl.value ? phoneEl : nameEl);
+      firstEmpty.focus();
+    }, 150);
 
     function closeModal() {
       modal.style.display = 'none';
       cancelBtn.removeEventListener('click', onCancel);
       okBtn.removeEventListener('click', onOk);
-      continueBtn.removeEventListener('click', onContinue);
+      whatsappBtn.removeEventListener('click', onWhatsApp);
+      paystackBtn.removeEventListener('click', onPaystack);
     }
     function onCancel() { closeModal(); reject(); }
     function onOk() {
@@ -759,17 +862,33 @@ function showCheckoutModal() {
       data = {
         customer_name: name,
         customer_phone: phone,
-        delivery_area: areaEl ? areaEl.value.trim() : '',
+        customer_email: emailEl.value.trim(),
+        delivery_area: cityEl.value.trim(),
+        delivery_address: {
+          line1: line1El.value.trim(), line2: line2El.value.trim(), city: cityEl.value.trim(),
+          region: regionEl.value.trim(), landmark: landmarkEl.value.trim()
+        },
         notes: notesEl ? notesEl.value.trim() : ''
       };
       step1.style.display = 'none';
       step2.style.display = 'block';
     }
-    function onContinue() { closeModal(); resolve(data); }
+    function onWhatsApp() { closeModal(); resolve(Object.assign({}, data, { checkout_method: 'whatsapp' })); }
+    function onPaystack() {
+      const email = emailEl.value.trim();
+      const required = [emailEl, line1El, cityEl, regionEl];
+      required.forEach((input) => { input.style.borderColor = '#e0e4e8'; });
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { emailEl.style.borderColor = '#dc2626'; emailEl.focus(); return; }
+      const firstMissing = required.slice(1).find((input) => !input.value.trim());
+      if (firstMissing) { firstMissing.style.borderColor = '#dc2626'; firstMissing.focus(); return; }
+      closeModal();
+      resolve(Object.assign({}, data, { customer_email: email, checkout_method: 'paystack' }));
+    }
 
     cancelBtn.addEventListener('click', onCancel);
     okBtn.addEventListener('click', onOk);
-    continueBtn.addEventListener('click', onContinue);
+    whatsappBtn.addEventListener('click', onWhatsApp);
+    paystackBtn.addEventListener('click', onPaystack);
     modal.addEventListener('click', e => { if (e.target === modal) onCancel(); }, { once: true });
   });
 }
@@ -873,16 +992,38 @@ if (checkoutBtn) {
     const orderPayload = {
         customer_name,
         customer_phone,
+        customer_email: details.customer_email || '',
         order_type: order_type,
         delivery_area: delivery_area,
+        delivery_address: details.delivery_address || {},
         notes: order_notes,
         items: cart.map(c => ({ id: c.id, size: c.size, quantity: c.qty }))
     };
 
     try {
+        if (details.checkout_method === 'paystack') {
+            const paystackResponse = await fetch('/api/checkout/paystack', {
+                method: 'POST',
+                headers: await customerAuthHeaders(true),
+                body: JSON.stringify(orderPayload)
+            });
+            const paystackData = await paystackResponse.json();
+            if (!paystackResponse.ok || !paystackData.authorization_url) {
+                showToast(paystackData.error || 'Could not start Paystack checkout', 'error');
+                return;
+            }
+            localStorage.setItem(PAYSTACK_PENDING_KEY, JSON.stringify({
+                reference: paystackData.reference,
+                order_number: paystackData.order_number,
+                created_at: new Date().toISOString(),
+                items: cart.map((item) => ({ id: item.id, size: item.size, qty: item.qty, ws: item.ws || 0 }))
+            }));
+            window.location.assign(paystackData.authorization_url);
+            return;
+        }
         const res = await fetch('/api/orders', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: await customerAuthHeaders(true),
             body: JSON.stringify(orderPayload)
         });
         const data = await res.json();
@@ -913,6 +1054,7 @@ if (checkoutBtn) {
 
             // Clear cart
             cart = [];
+            saveCart();
             renderCartDrawer();
             closeCart();
         } else {
@@ -926,6 +1068,7 @@ if (checkoutBtn) {
           <svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51a12.8 12.8 0 0 0-.57-.01c-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 0 1-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 0 1-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.82 9.82 0 0 1 2.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.81 11.81 0 0 0 12.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.88 11.88 0 0 0 5.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.82 11.82 0 0 0-3.48-8.413z"/></svg>
           Checkout via WhatsApp
         `;
+        checkoutBtn.innerHTML = '<i class="fas fa-lock text-sm"></i> Choose checkout method';
     }
   });
 }
@@ -943,6 +1086,13 @@ async function initApp() {
     } catch (e) {
         console.warn("Could not load settings:", e);
     }
+    try {
+      const paystackConfigResponse = await fetch('/api/payments/paystack/config', { cache: 'no-store' });
+      if (paystackConfigResponse.ok) {
+        const paystackConfig = await paystackConfigResponse.json();
+        paystackEnabled = paystackConfig.enabled === true;
+      }
+    } catch (error) { paystackEnabled = false; }
 
     const res = await fetch('/api/products');
     const contentType = res.headers.get('content-type') || '';
@@ -1069,7 +1219,7 @@ async function initApp() {
 
   renderProducts();
   renderCartDrawer();
-  console.log(`DC Kids Brand loaded — ${products.length} products`);
+  await reconcilePendingPaystackCheckout();
 }
 
 initApp();
@@ -1157,10 +1307,18 @@ function filterByCategory(catId) {
 // Local cache of wishlist product IDs (set). Mirrored to server when signed in.
 let wishlistSet = new Set();
 const WISHLIST_LS_KEY = 'dcKidsGuestWishlist';
-const CUSTOMER_TOKEN_KEY = 'dcKidsCustomerToken';
+let firebaseCustomerState = { user: null, customer: null };
+let firebaseDefaultAddress = null;
+let firebaseAddresses = [];
 
-function getCustomerToken() { return localStorage.getItem(CUSTOMER_TOKEN_KEY); }
-function isSignedIn() { return !!getCustomerToken(); }
+function isSignedIn() { return !!(firebaseCustomerState.user && firebaseCustomerState.user.emailVerified && firebaseCustomerState.customer); }
+async function customerAuthHeaders(includeJson) {
+  if (!isSignedIn() || !window.DCKidsAuth) return includeJson ? { 'Content-Type': 'application/json' } : {};
+  const token = await window.DCKidsAuth.getIdToken();
+  const headers = { 'Authorization': 'Bearer ' + token };
+  if (includeJson) headers['Content-Type'] = 'application/json';
+  return headers;
+}
 
 function loadGuestWishlist() {
   try { return new Set(JSON.parse(localStorage.getItem(WISHLIST_LS_KEY)) || []); }
@@ -1173,7 +1331,16 @@ function saveGuestWishlist() {
 async function syncWishlistState() {
   if (isSignedIn()) {
     try {
-      const res = await fetch('/api/wishlist', { headers: { 'Authorization': 'Bearer ' + getCustomerToken() } });
+      const guestIds = Array.from(loadGuestWishlist());
+      if (guestIds.length) {
+        const mergeRes = await fetch('/api/wishlist/merge', {
+          method: 'POST',
+          headers: await customerAuthHeaders(true),
+          body: JSON.stringify({ productIds: guestIds })
+        });
+        if (mergeRes.ok) localStorage.removeItem(WISHLIST_LS_KEY);
+      }
+      const res = await fetch('/api/wishlist', { headers: await customerAuthHeaders(false) });
       if (res.ok) {
         const rows = await res.json();
         wishlistSet = new Set(rows.map(r => Number(r.product_id)));
@@ -1206,7 +1373,7 @@ async function toggleWishlist(event, productId) {
 
   if (isSignedIn()) {
     try {
-      const headers = { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + getCustomerToken() };
+      const headers = await customerAuthHeaders(true);
       if (wasActive) {
         await fetch('/api/wishlist/' + id, { method: 'DELETE', headers });
       } else {
@@ -1256,9 +1423,11 @@ function renderWishlist() {
     body.innerHTML = '<div style="padding:32px 24px;text-align:center;color:#999;font-size:15px;line-height:1.7;">Your wishlist is empty.<br>Tap the ♥ on any product to save it here.</div>';
     return;
   }
-  body.innerHTML = items.map(p => `
+  body.innerHTML = items.map(p => {
+    const image = resolveProductImage(p);
+    return `
     <div class="cart-item">
-      <img src="${escapeStr(p.img || '')}" alt="${escapeStr(p.name || '')}" class="cart-item__img">
+      <div class="cart-item__img-wrap"><img src="${escapeStr(image.src)}" alt="${escapeStr(p.name || '')}" class="cart-item__img" onerror="useCategoryFallback(this, '${escapeStr(p.cat || '')}')">${image.isCategoryFallback ? categoryImageBadge() : ''}</div>
       <div class="cart-item__details">
         <div class="cart-item__title">${escapeStr(p.name || '')}</div>
         <div class="cart-item__price">${p.price ? 'GH₵ ' + gh(p.price) : 'Ask for price'}</div>
@@ -1270,7 +1439,8 @@ function renderWishlist() {
       <button class="cart-item__remove" aria-label="Remove from wishlist" onclick="toggleWishlist(event, ${p.id})">
         <svg viewBox="0 0 24 24"><path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M10 11v6M14 11v6"/></svg>
       </button>
-    </div>`).join('');
+    </div>`;
+  }).join('');
 }
 
 /* ── Reviews ── */
@@ -1355,6 +1525,10 @@ function ensureReviewsModal() {
         <h3 id="rv-modal-title" style="margin:0;font-size:18px;font-weight:700;color:#0F4C3A;font-family:'Playfair Display',serif;">Product</h3>
         <button type="button" id="rv-close" style="background:none;border:none;font-size:24px;cursor:pointer;color:#888;line-height:1;padding:4px;">&times;</button>
       </div>
+      <div id="rv-product-media" class="review-product-media">
+        <img id="rv-product-image" src="images/placeholder.svg" alt="">
+        <span id="rv-category-image-badge" class="category-image-badge" style="display:none;">Category image</span>
+      </div>
       <div id="rv-description" style="display:none;font-size:13px;color:#555;line-height:1.6;margin-bottom:16px;"></div>
       <div style="font-size:12px;font-weight:700;color:#888;text-transform:uppercase;letter-spacing:0.6px;margin-bottom:8px;">Reviews</div>
       <div id="rv-summary" style="display:flex;align-items:center;gap:12px;padding:12px 14px;background:#FFF5F7;border-radius:12px;margin-bottom:18px;">
@@ -1419,8 +1593,7 @@ function ensureReviewsModal() {
       title: document.getElementById('rv-title').value.trim(),
       body: document.getElementById('rv-body').value.trim()
     };
-    const headers = { 'Content-Type': 'application/json' };
-    if (isSignedIn()) headers['Authorization'] = 'Bearer ' + getCustomerToken();
+    const headers = await customerAuthHeaders(true);
     try {
       const res = await fetch('/api/products/' + pid + '/reviews', { method: 'POST', headers, body: JSON.stringify(body) });
       const data = await res.json();
@@ -1443,6 +1616,15 @@ async function openReviewsModal(productId, productName) {
   document.getElementById('rv-modal-title').textContent = productName || 'Product';
 
   const product = products.find(p => p.id === productId);
+  const productImage = resolveProductImage(product);
+  const imageEl = document.getElementById('rv-product-image');
+  const imageBadgeEl = document.getElementById('rv-category-image-badge');
+  if (imageEl) {
+    imageEl.src = productImage.src;
+    imageEl.alt = productName || 'Product';
+    imageEl.onerror = () => useCategoryFallback(imageEl, product && product.cat);
+  }
+  if (imageBadgeEl) imageBadgeEl.style.display = productImage.isCategoryFallback ? 'inline-flex' : 'none';
   const descEl = document.getElementById('rv-description');
   if (product && product.description) {
     descEl.textContent = product.description;
@@ -1507,8 +1689,33 @@ function showToast(msg, kind) {
 }
 function escapeStr(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' })[c]); }
 
-// Boot wishlist sync once on page load (after grid first renders)
-window.addEventListener('load', () => { setTimeout(syncWishlistState, 200); });
+async function applyFirebaseCustomerState(nextState) {
+  firebaseCustomerState = nextState || { user: null, customer: null };
+  const label = document.getElementById('navAccountLabel');
+  const headerLink = document.getElementById('accountHeaderLink');
+  if (label) label.textContent = firebaseCustomerState.customer
+    ? (String(firebaseCustomerState.customer.name || 'My Account').split(/\s+/)[0] + "'s Account")
+    : 'My Account';
+  if (headerLink) headerLink.title = firebaseCustomerState.customer ? 'Open my account' : 'Sign in or create an account';
+  firebaseDefaultAddress = null;
+  firebaseAddresses = [];
+  if (isSignedIn()) {
+    try {
+      const response = await fetch('/api/customer/addresses', { headers: await customerAuthHeaders(false) });
+      if (response.ok) {
+        firebaseAddresses = await response.json();
+        firebaseDefaultAddress = firebaseAddresses.find((address) => address.is_default) || firebaseAddresses[0] || null;
+      }
+    } catch (error) { /* Checkout remains usable without account prefill. */ }
+  }
+  await syncWishlistState();
+}
+
+window.addEventListener('dckids-auth-change', (event) => { applyFirebaseCustomerState(event.detail); });
+window.addEventListener('load', () => {
+  setTimeout(syncWishlistState, 200);
+  if (window.DCKidsAuth) window.DCKidsAuth.onChange(applyFirebaseCustomerState);
+});
 
 /* ── Input guards: block wrong character class in fields ──
    number fields: block e/E/+/- (and "." on integer fields);
