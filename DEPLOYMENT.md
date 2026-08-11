@@ -50,7 +50,7 @@ is up to your host:
 | `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` | no | Optional instant order alerts. `TELEGRAM_CHAT_ID` accepts **one or more** comma-separated destinations — each can be a personal chat id or a shared channel/group id. To add the new owner, append their id (e.g. `111111111,222222222`); every destination receives each order. For a channel, add the bot as an admin and use the channel id. |
 | `SHOP_NOTIFY_EMAIL`, `SMTP_*` | no | Optional transactional email. |
 | `FIREBASE_API_KEY`, `FIREBASE_AUTH_DOMAIN`, `FIREBASE_PROJECT_ID`, `FIREBASE_APP_ID` | **yes** | Public Firebase web-app configuration used by the customer account page. |
-| `GOOGLE_APPLICATION_CREDENTIALS` | production* | Path to a Firebase service-account JSON file stored outside Git. Omit when the host supplies Application Default Credentials or workload identity. |
+| `GOOGLE_APPLICATION_CREDENTIALS` / `FIREBASE_SERVICE_ACCOUNT_JSON` | production* | Use an external service-account file path, workload identity, or a sealed JSON environment value on Railway-style hosts. Never expose or commit the JSON. |
 | `PAYSTACK_SECRET_KEY` | direct payments | Server-only Paystack test/live secret. Never expose it to browser code or Git. |
 | `PAYSTACK_LEGACY_WEBHOOK_URL` | shared Paystack integration | Existing app's webhook. DC Kids forwards every valid non-`DCK-` event to this fixed URL. |
 
@@ -83,7 +83,7 @@ Customer accounts use Firebase Authentication; the existing admin Google/OTP/rec
 4. Configure the verification-email and password-reset templates with the store name and production continue URL.
 5. Set the Firebase password policy to require at least **8 characters**. The app also enforces this minimum before registration.
 6. Copy the web app's `apiKey`, `authDomain`, `projectId`, and `appId` into the matching environment variables above.
-7. Give the Node server Firebase Admin credentials through Application Default Credentials. If using a service-account JSON file, store it outside the repository and set `GOOGLE_APPLICATION_CREDENTIALS` to its absolute path.
+7. Give the Node server Firebase Admin credentials through Application Default Credentials. If using a service-account JSON file, store it outside the repository and set `GOOGLE_APPLICATION_CREDENTIALS` to its absolute path. On Railway-style hosts, store the complete JSON only in the sealed `FIREBASE_SERVICE_ACCOUNT_JSON` variable.
 
 Restart the server after changing configuration. `GET /api/customer/auth/config` intentionally exposes only the four public web fields. Customer profile, orders, addresses, wishlist, and reviews require a verified Firebase email and a valid bearer ID token.
 

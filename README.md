@@ -103,7 +103,7 @@ Set these in `server/.env` (see `DEPLOYMENT.md` for the full table):
 | `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` | Optional order alerts. `TELEGRAM_CHAT_ID` accepts multiple comma-separated chat/channel IDs. |
 | `SHOP_NOTIFY_EMAIL`, `SMTP_*` | Optional transactional email. |
 | `FIREBASE_API_KEY`, `FIREBASE_AUTH_DOMAIN`, `FIREBASE_PROJECT_ID`, `FIREBASE_APP_ID` | Public Firebase web-app configuration for customer authentication. |
-| `GOOGLE_APPLICATION_CREDENTIALS` | External service-account path when the host does not provide Application Default Credentials. |
+| `GOOGLE_APPLICATION_CREDENTIALS`, `FIREBASE_SERVICE_ACCOUNT_JSON` | External service-account path or sealed JSON value when the host does not provide Application Default Credentials. |
 
 ---
 

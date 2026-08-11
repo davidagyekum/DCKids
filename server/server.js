@@ -4,7 +4,7 @@ const express = require('express');
 const cors = require('cors');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
-const { initializeApp: initializeFirebaseAdmin, applicationDefault, getApps: getFirebaseApps } = require('firebase-admin/app');
+const { initializeApp: initializeFirebaseAdmin, applicationDefault, cert, getApps: getFirebaseApps } = require('firebase-admin/app');
 const { getAuth: getFirebaseAuth } = require('firebase-admin/auth');
 const db = require('./db');
 
@@ -97,8 +97,9 @@ const JWT_SECRET = process.env.JWT_SECRET || 'dckids-super-secret-key-change-in-
 
 // Customer authentication is handled by Firebase. These web-app values are
 // public identifiers (not secrets) and are exposed through /api/customer/auth/config.
-// Server credentials stay outside the repository and are discovered through
-// Application Default Credentials / GOOGLE_APPLICATION_CREDENTIALS.
+// Server credentials stay outside the repository. File-based hosts can use
+// Application Default Credentials / GOOGLE_APPLICATION_CREDENTIALS, while
+// platforms such as Railway can supply the JSON as a sealed environment value.
 const FIREBASE_PUBLIC_CONFIG = {
     apiKey: String(process.env.FIREBASE_API_KEY || '').trim(),
     authDomain: String(process.env.FIREBASE_AUTH_DOMAIN || '').trim(),
@@ -108,8 +109,22 @@ const FIREBASE_PUBLIC_CONFIG = {
 let firebaseCustomerAuth = null;
 if (FIREBASE_PUBLIC_CONFIG.projectId) {
     try {
+        const serviceAccountJson = String(process.env.FIREBASE_SERVICE_ACCOUNT_JSON || '').trim();
+        let credential = applicationDefault();
+        if (serviceAccountJson) {
+            let serviceAccount;
+            try {
+                serviceAccount = JSON.parse(serviceAccountJson);
+            } catch (parseError) {
+                throw new Error('FIREBASE_SERVICE_ACCOUNT_JSON must contain valid JSON', { cause: parseError });
+            }
+            if (!serviceAccount.project_id || !serviceAccount.client_email || !serviceAccount.private_key) {
+                throw new Error('FIREBASE_SERVICE_ACCOUNT_JSON is missing required service-account fields');
+            }
+            credential = cert(serviceAccount);
+        }
         const firebaseApp = getFirebaseApps()[0] || initializeFirebaseAdmin({
-            credential: applicationDefault(),
+            credential,
             projectId: FIREBASE_PUBLIC_CONFIG.projectId
         });
         firebaseCustomerAuth = getFirebaseAuth(firebaseApp);
