@@ -128,17 +128,12 @@ if (IS_PROD && (!process.env.JWT_SECRET || JWT_SECRET === 'dckids-super-secret-k
     process.exit(1);
 }
 
-// Sign-in is passwordless: codes arrive by email. A production deploy without a
-// Resend key can't deliver codes, which locks every admin out (the codes are
-// deliberately NOT logged in production — see request-code). Google sign-in, if
-// configured, is a usable fallback, so degrade to a loud warning in that case.
+// Email delivery is optional infrastructure. Missing Resend credentials must
+// never take the storefront, WhatsApp checkout, or payment webhooks offline.
+// Admin email-code sign-in is disabled separately below; Google and recovery
+// codes remain available when configured.
 if (IS_PROD && !process.env.RESEND_API_KEY) {
-    if ((process.env.GOOGLE_CLIENT_ID || '').trim()) {
-        console.warn('WARNING: RESEND_API_KEY is not set — email sign-in codes cannot be delivered. Only "Continue with Google" will work.');
-    } else {
-        console.error('FATAL: RESEND_API_KEY must be set in production — sign-in codes are emailed and there is no other way in. Refusing to start.');
-        process.exit(1);
-    }
+    console.warn('WARNING: RESEND_API_KEY is not set — admin email sign-in and notification emails are disabled. Storefront checkout remains available.');
 }
 
 // Unexpected-failure responses: the user gets a generic message; the real error
@@ -454,6 +449,11 @@ app.post('/api/admin/register', registerLimiter, (req, res) => {
 
 // Step 1 of sign-in: email a 6-digit code to an ACTIVE account.
 app.post('/api/auth/request-code', loginLimiter, (req, res) => {
+    if (IS_PROD && !RESEND_API_KEY) {
+        return res.status(503).json({
+            error: 'Email sign-in is temporarily unavailable. Use Google sign-in or a recovery code.'
+        });
+    }
     const mail = String((req.body && req.body.email) || '').trim().toLowerCase();
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(mail)) return res.status(400).json({ error: 'Enter a valid email.' });
     db.get(`SELECT * FROM users WHERE email = ?`, [mail], async (err, user) => {
@@ -551,7 +551,10 @@ app.post('/api/auth/recovery', loginLimiter, (req, res) => {
 // with which client id). Returns null when unconfigured so the page silently
 // falls back to email-OTP. The client id is not a secret.
 app.get('/api/auth/config', (req, res) => {
-    res.json({ googleClientId: GOOGLE_CLIENT_ID || null });
+    res.json({
+        googleClientId: GOOGLE_CLIENT_ID || null,
+        emailCodeAvailable: !IS_PROD || Boolean(RESEND_API_KEY)
+    });
 });
 
 // Primary sign-in: "Continue with Google". Verifies the Google ID token, then

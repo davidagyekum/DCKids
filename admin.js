@@ -585,6 +585,19 @@ function initGoogleSignIn() {
     fetch(API_URL + '/auth/config')
     .then(function (res) { return res.json(); })
     .then(function (cfg) {
+        var emailAvailable = !cfg || cfg.emailCodeAvailable !== false;
+        var emailStatus = document.getElementById('login-email-status');
+        var emailInput = document.getElementById('login-email');
+        var emailButton = document.getElementById('login-send-code-btn');
+        if (!emailAvailable) {
+            if (emailStatus) emailStatus.textContent = 'Email sign-in is temporarily unavailable. Use Google or a recovery code.';
+            if (emailInput) emailInput.disabled = true;
+            if (emailButton) {
+                emailButton.disabled = true;
+                emailButton.setAttribute('aria-disabled', 'true');
+                emailButton.textContent = 'Email sign-in unavailable';
+            }
+        }
         if (!cfg || !cfg.googleClientId) return;
         var wrap = document.getElementById('google-signin-wrap');
         if (wrap) wrap.style.display = 'block';

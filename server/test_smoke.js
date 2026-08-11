@@ -166,6 +166,11 @@ async function run() {
         r.status === 200 && Object.keys(firebaseConfig).sort().join(',') === 'apiKey,appId,authDomain,projectId' && firebaseConfig.projectId === 'smoke-test');
     check('customer API responses prohibit caching', /no-store/.test(r.headers.get('cache-control') || ''));
 
+    r = await fetch(`${BASE}/api/auth/config`);
+    const adminAuthConfig = await r.json();
+    check('admin auth config reports local email-code availability',
+        r.status === 200 && adminAuthConfig.emailCodeAvailable === true);
+
     // ---- auth: passwordless flow ----
     r = await fetch(`${BASE}/api/orders`);
     check('orders list requires auth', r.status === 401, `status ${r.status}`);
