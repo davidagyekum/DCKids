@@ -335,7 +335,9 @@ function renderCard(p, index) {
   return `
     <article class="${cardClass}" data-category="${escapeStr(p.cat || '')}" data-product-id="${p.id}" style="animation-delay: ${index * 0.04}s">
       <div class="product-card__img-wrap">
-        <img class="product-card__img" src="${imgHtml}" alt="${nameHtml}" loading="lazy" onerror="useCategoryFallback(this, '${escapeStr(p.cat || '')}')">
+        <a class="product-card__detail-link" href="/product.html?id=${p.id}" aria-label="View details for ${nameHtml}">
+          <img class="product-card__img" src="${imgHtml}" alt="${nameHtml}" loading="lazy" onerror="useCategoryFallback(this, '${escapeStr(p.cat || '')}')">
+        </a>
         ${image.isCategoryFallback ? categoryImageBadge() : ''}
         ${badgeHTML}
         ${lowStockHTML}
@@ -344,7 +346,7 @@ function renderCard(p, index) {
         </button>
       </div>
       <div class="product-card__body">
-        <button type="button" class="product-card__name" onclick="openReviewsModal(${p.id}, '${escName}')" aria-label="View details for ${nameHtml}">${nameHtml}</button>
+        <a class="product-card__name" href="/product.html?id=${p.id}" aria-label="View details for ${nameHtml}">${nameHtml}</a>
         <button type="button" class="product-card__rating" data-rating-id="${p.id}" onclick="openReviewsModal(${p.id}, '${escName}')" aria-label="View or write a review for ${nameHtml}" style="display:none;">
           <span class="rating-stars" data-stars-for="${p.id}"></span>
           <span class="rating-count" data-count-for="${p.id}"></span>
@@ -802,7 +804,9 @@ function showCheckoutModal() {
     const okBtn       = document.getElementById('checkoutModalOk');
     const whatsappBtn = document.getElementById('checkoutWhatsAppBtn');
     const paystackBtn = document.getElementById('checkoutPaystackBtn');
+    const backBtn = document.getElementById('checkoutBackBtn');
     const paystackUnavailable = document.getElementById('checkoutPaystackUnavailable');
+    const validationError = document.getElementById('checkoutValidationError');
     let data = null;
 
     paystackBtn.disabled = !paystackEnabled;
@@ -836,8 +840,12 @@ function showCheckoutModal() {
       savedAddressEl.onchange = () => fillAddress(firebaseAddresses.find((address) => String(address.id) === savedAddressEl.value));
     }
     if (notesEl) notesEl.value = '';
-    nameEl.style.borderColor = '#e0e4e8';
-    phoneEl.style.borderColor = '#e0e4e8';
+    const checkoutInputs = [nameEl, phoneEl, emailEl, line1El, cityEl, regionEl];
+    checkoutInputs.forEach((input) => { input.style.borderColor = '#e0e4e8'; });
+    if (validationError) {
+      validationError.textContent = '';
+      validationError.style.display = 'none';
+    }
     closeCart();
     modal.style.display = 'flex';
     modal.style.pointerEvents = 'auto';
@@ -852,13 +860,38 @@ function showCheckoutModal() {
       okBtn.removeEventListener('click', onOk);
       whatsappBtn.removeEventListener('click', onWhatsApp);
       paystackBtn.removeEventListener('click', onPaystack);
+      backBtn.removeEventListener('click', onBack);
+      modal.removeEventListener('click', onBackdrop);
     }
     function onCancel() { closeModal(); reject(); }
+    function showValidationError(message, input) {
+      step2.style.display = 'none';
+      step1.style.display = 'block';
+      if (validationError) {
+        validationError.textContent = message;
+        validationError.style.display = 'block';
+      }
+      if (input) {
+        input.style.borderColor = '#dc2626';
+        setTimeout(() => {
+          input.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          input.focus({ preventScroll: true });
+        }, 50);
+      }
+    }
+    function clearValidationError() {
+      if (validationError) {
+        validationError.textContent = '';
+        validationError.style.display = 'none';
+      }
+      checkoutInputs.forEach((input) => { input.style.borderColor = '#e0e4e8'; });
+    }
     function onOk() {
+      clearValidationError();
       const name  = nameEl.value.trim();
       const phone = phoneEl.value.trim();
-      if (!name)  { nameEl.style.borderColor  = '#dc2626'; nameEl.focus();  return; }
-      if (!phone) { phoneEl.style.borderColor = '#dc2626'; phoneEl.focus(); return; }
+      if (!name)  { showValidationError('Please enter your full name.', nameEl); return; }
+      if (!phone) { showValidationError('Please enter your phone or WhatsApp number.', phoneEl); return; }
       data = {
         customer_name: name,
         customer_phone: phone,
@@ -877,19 +910,36 @@ function showCheckoutModal() {
     function onPaystack() {
       const email = emailEl.value.trim();
       const required = [emailEl, line1El, cityEl, regionEl];
-      required.forEach((input) => { input.style.borderColor = '#e0e4e8'; });
-      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { emailEl.style.borderColor = '#dc2626'; emailEl.focus(); return; }
+      clearValidationError();
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+        showValidationError('Enter a valid email address to pay with Paystack.', emailEl);
+        return;
+      }
       const firstMissing = required.slice(1).find((input) => !input.value.trim());
-      if (firstMissing) { firstMissing.style.borderColor = '#dc2626'; firstMissing.focus(); return; }
+      if (firstMissing) {
+        const fieldNames = new Map([[line1El, 'delivery address'], [cityEl, 'city or area'], [regionEl, 'region']]);
+        showValidationError(`Please enter your ${fieldNames.get(firstMissing)} to pay with Paystack.`, firstMissing);
+        return;
+      }
       closeModal();
       resolve(Object.assign({}, data, { customer_email: email, checkout_method: 'paystack' }));
+    }
+    function onBack() {
+      clearValidationError();
+      step2.style.display = 'none';
+      step1.style.display = 'block';
+      setTimeout(() => emailEl.focus(), 50);
+    }
+    function onBackdrop(event) {
+      if (event.target === modal) onCancel();
     }
 
     cancelBtn.addEventListener('click', onCancel);
     okBtn.addEventListener('click', onOk);
     whatsappBtn.addEventListener('click', onWhatsApp);
     paystackBtn.addEventListener('click', onPaystack);
-    modal.addEventListener('click', e => { if (e.target === modal) onCancel(); }, { once: true });
+    backBtn.addEventListener('click', onBack);
+    modal.addEventListener('click', onBackdrop);
   });
 }
 
@@ -1220,6 +1270,10 @@ async function initApp() {
   renderProducts();
   renderCartDrawer();
   await reconcilePendingPaystackCheckout();
+  if (new URLSearchParams(window.location.search).get('openCart') === '1' && cart.length) {
+    openCart();
+    window.history.replaceState({}, '', window.location.pathname + window.location.hash);
+  }
 }
 
 initApp();

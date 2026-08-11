@@ -9,7 +9,7 @@
    - Images + fonts: cache-first.
    - Bumping VERSION wipes old caches on activate.
 */
-const VERSION = 'dckids-v132';
+const VERSION = 'dckids-v134';
 const STATIC_CACHE = 'dckids-static-' + VERSION;
 const RUNTIME_CACHE = 'dckids-runtime-' + VERSION;
 
@@ -20,12 +20,15 @@ const APP_SHELL = [
   '/index.html',
   '/admin.html',
   '/account.html',
+  '/product.html',
   '/payment-result.html',
   '/styles.css',
+  '/product.css',
   '/tailwind-storefront.css',
   '/tailwind-admin.css',
   '/image-resolver.js',
   '/account.js',
+  '/product.js',
   '/payment-result.js',
   '/firebase-auth.js',
   '/manifest.json',
@@ -78,7 +81,7 @@ self.addEventListener('fetch', (event) => {
 
   // Live store config must NEVER be served from cache — always go to network so
   // admin changes (banner, discount, WhatsApp) reach shoppers immediately.
-  const isLiveConfig = url.pathname === '/api/settings' || url.pathname === '/api/products';
+  const isLiveConfig = url.pathname === '/api/settings' || url.pathname === '/api/products' || /^\/api\/products\/\d+$/.test(url.pathname);
   if (isLiveConfig) {
     event.respondWith(fetch(req).catch(() => caches.match(req)));
     return;
@@ -111,7 +114,9 @@ self.addEventListener('fetch', (event) => {
         // right after a new SW takes control).
         const fallback = url.pathname.startsWith('/admin')
           ? '/admin.html'
-          : (url.pathname.startsWith('/account') ? '/account.html' : '/index.html');
+          : (url.pathname.startsWith('/account')
+            ? '/account.html'
+            : (url.pathname.startsWith('/product') ? '/product.html' : '/index.html'));
         return caches.match(fallback);
       }))
     );

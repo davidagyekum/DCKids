@@ -906,7 +906,7 @@
   <script src="gradient.js?v=3"></script>
   <script src="image-resolver.js?v=1"></script>
   <script type="module" src="firebase-auth.js?v=1"></script>
-  <script src="app.js?v=24"></script>
+  <script src="app.js?v=25"></script>
 
   <!-- ===== CHECKOUT MODAL ===== -->
   <div id="checkoutModal" style="display:none;position:fixed;inset:0;z-index:3000;align-items:center;justify-content:center;background:rgba(0,0,0,0.45);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);">
@@ -921,6 +921,8 @@
           <h2 style="font-size:20px;font-weight:700;color:#1f2937;margin:0 0 6px;">Enter Customer Details</h2>
           <p style="font-size:13px;color:#9ca3af;margin:0;line-height:1.5;">Please provide your details to continue with the order.</p>
         </div>
+
+        <div id="checkoutValidationError" role="alert" aria-live="assertive" style="display:none;margin:0 0 16px;padding:11px 13px;border:1px solid #fecaca;border-radius:10px;background:#fef2f2;color:#b91c1c;font-size:12.5px;line-height:1.45;text-align:left;"></div>
 
         <label style="display:block;font-size:12px;font-weight:600;color:#374151;margin-bottom:5px;text-transform:uppercase;letter-spacing:0.04em;">Full Name <span style="color:#dc2626;">*</span></label>
         <div style="position:relative;margin-bottom:14px;">
@@ -1007,6 +1009,7 @@
           Pay securely with Paystack
         </button>
         <p id="checkoutPaystackUnavailable" style="display:none;margin:9px 0 0;color:#9ca3af;font-size:11px;line-height:1.4;">Direct payment is not available yet. WhatsApp checkout still works.</p>
+        <button id="checkoutBackBtn" type="button" style="width:100%;margin-top:12px;padding:11px;border:1.5px solid #d1d5db;border-radius:12px;font-size:13px;font-weight:600;color:#4b5563;background:#fff;cursor:pointer;font-family:inherit;">&larr; Back to customer details</button>
       </div>
 
       <!-- Step 3: Receipt -->

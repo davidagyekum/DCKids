@@ -2902,6 +2902,40 @@ app.get('/api/products/image-health', authenticateToken, requireManager, (req, r
     });
 });
 
+// Public product detail used by shareable product pages. This catch-all belongs
+// below named GET routes such as /image-health and /reviews-summary so those
+// names can never be mistaken for product IDs.
+app.get('/api/products/:id', (req, res) => {
+    const productId = Number.parseInt(req.params.id, 10);
+    if (!Number.isInteger(productId) || String(productId) !== String(req.params.id) || productId <= 0) {
+        return res.status(400).json({ error: 'Invalid product ID' });
+    }
+    db.get(`SELECT * FROM products WHERE id = ?`, [productId], (err, product) => {
+        if (err) return serverError(res, err);
+        if (!product) return res.status(404).json({ error: 'Product not found' });
+        db.all(
+            `SELECT pi.image_url
+               FROM product_images pi
+              WHERE pi.product_id = ?
+                AND (
+                    pi.image_url = ?
+                    OR NOT EXISTS (
+                        SELECT 1 FROM products sibling
+                         WHERE sibling.id <> ? AND sibling.img = pi.image_url
+                    )
+                )
+              ORDER BY pi.id ASC`,
+            [productId, product.img, productId],
+            (galleryError, rows) => {
+                if (galleryError) return serverError(res, galleryError);
+                res.json(Object.assign({}, product, {
+                    images: (rows || []).map((row) => row.image_url).filter(Boolean)
+                }));
+            }
+        );
+    });
+});
+
 app.post('/api/products/bulk-images', authenticateToken, requireManager, (req, res) => {
     const fs = require('fs');
     const items = req.body && req.body.items;

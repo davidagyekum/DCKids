@@ -125,6 +125,13 @@ async function run() {
     // ---- fresh-database boot: seeded from the products.json snapshot ----
     const products = await (await fetch(`${BASE}/api/products`)).json();
     check('fresh DB seeds full catalogue', Array.isArray(products) && products.length >= 200, `got ${products.length}`);
+    let productDetailResponse = await fetch(`${BASE}/api/products/1`);
+    const productDetail = await productDetailResponse.json();
+    check('public product detail returns catalogue item and gallery', productDetailResponse.status === 200 && productDetail.id === 1 && Array.isArray(productDetail.images));
+    productDetailResponse = await fetch(`${BASE}/api/products/not-a-number`);
+    check('product detail rejects malformed IDs', productDetailResponse.status === 400, `status ${productDetailResponse.status}`);
+    productDetailResponse = await fetch(`${BASE}/api/products/999999`);
+    check('product detail returns 404 for missing items', productDetailResponse.status === 404, `status ${productDetailResponse.status}`);
     const catsWithProducts = new Set(products.map(p => p.cat));
     check('all storefront categories populated',
         ['clothing', 'shoes', 'feeding', 'gear', 'bathcare', 'bedding'].every(c => catsWithProducts.has(c)),
@@ -153,9 +160,16 @@ async function run() {
     const swSource = fs.readFileSync(path.join(__dirname, '..', 'service-worker.js'), 'utf8');
     check('service worker caches category fallbacks', categoryAssets.every(name => swSource.includes('/images/category-fallbacks/' + name + '.webp')));
     check('service worker image failure returns SVG placeholder', swSource.includes("isImage ? caches.match('/images/placeholder.svg')"));
+    check('service worker includes offline product page assets', ['/product.html', '/product.css', '/product.js'].every(asset => swSource.includes(asset)));
+    const storefrontSource = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+    const appSource = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
+    check('checkout includes visible validation feedback and back navigation',
+        storefrontSource.includes('checkoutValidationError') && storefrontSource.includes('checkoutBackBtn'));
+    check('Paystack validation returns customers to their missing details',
+        appSource.includes('showValidationError') && appSource.includes('Enter a valid email address to pay with Paystack.'));
 
     // ---- static frontend ----
-    for (const page of ['/', '/admin.html', '/track.html', '/account.html']) {
+    for (const page of ['/', '/admin.html', '/track.html', '/account.html', '/product.html?id=1']) {
         const r = await fetch(`${BASE}${page}`);
         check(`serves ${page}`, r.status === 200, `status ${r.status}`);
     }
