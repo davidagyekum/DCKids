@@ -9,7 +9,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 COPY server/package.json server/package-lock.json ./server/
-RUN npm --prefix server ci --omit=dev
+RUN npm_config_build_from_source=true npm --prefix server ci --omit=dev
 
 FROM node:22-bookworm-slim AS runtime
 
