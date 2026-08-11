@@ -163,6 +163,12 @@ async function run() {
     check('service worker includes offline product page assets', ['/product.html', '/product.css', '/product.js'].every(asset => swSource.includes(asset)));
     const storefrontSource = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
     const appSource = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
+    const customerAuthSource = fs.readFileSync(path.join(__dirname, '..', 'firebase-auth.js'), 'utf8');
+    check('Google customer sign-in is popup-first on every device',
+        customerAuthSource.indexOf('signInWithPopup(auth, provider)') < customerAuthSource.indexOf('signInWithRedirect(auth, provider)') &&
+        !customerAuthSource.includes('likelyMobile'));
+    check('Google redirect fallback still restores Firebase auth state',
+        customerAuthSource.indexOf('onIdTokenChanged(auth') < customerAuthSource.indexOf('getRedirectResult(auth)'));
     check('checkout includes visible validation feedback and back navigation',
         storefrontSource.includes('checkoutValidationError') && storefrontSource.includes('checkoutBackBtn'));
     check('Paystack validation returns customers to their missing details',

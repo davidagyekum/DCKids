@@ -145,8 +145,10 @@ async function initialize() {
     auth = getAuth(firebaseApp);
     await setPersistence(auth, browserLocalPersistence);
     state.configured = true;
-    await getRedirectResult(auth).catch((error) => { throw error; });
+    // Subscribe before resolving a redirect so Firebase can restore an existing
+    // local session even when a browser rejects the redirect helper's storage.
     onIdTokenChanged(auth, (user) => { synchronizeUser(user); });
+    await getRedirectResult(auth).catch((error) => { throw error; });
   } catch (error) {
     state.error = friendlyError(error);
     state.loading = false;
@@ -191,12 +193,10 @@ async function signInGoogle() {
   if (!auth) throw new Error(state.error || 'Customer sign-in is unavailable.');
   const provider = new GoogleAuthProvider();
   provider.setCustomParameters({ prompt: 'select_account' });
-  const likelyMobile = window.matchMedia('(pointer: coarse)').matches || /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
-  if (likelyMobile) {
-    await signInWithRedirect(auth, provider);
-    return null;
-  }
   try {
+    // Popup sign-in also works on mobile when it starts directly from a tap.
+    // It avoids the cross-origin redirect storage restrictions that can lose
+    // the result after the customer returns from Google's account chooser.
     const credential = await signInWithPopup(auth, provider);
     await synchronizeUser(credential.user, true);
     return credential.user;
