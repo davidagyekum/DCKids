@@ -1,0 +1,21 @@
+.git
+.gitignore
+.env
+*.env
+node_modules
+server/node_modules
+server/inventory.db*
+server/backups
+*.log
+tmp
+_frontend_backup_*
+_design_tmp*
+_image_originals_backup
+dckidsbrand_images
+dckidsbrand_videos
+dc kids (1)
+scratch
+scratch_*
+*.pdf
+*.MOV
+*.mov
