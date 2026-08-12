@@ -184,10 +184,24 @@ async function run() {
         sharedStylesSource.includes('.account-tab.is-active { color: #9de0bf;'));
     check('pre-order banner avoids stale dated messaging',
         storefrontSource.includes('Message us on WhatsApp for the current closing date.') &&
-        !storefrontSource.includes('Orders close May 18th'));
+        !storefrontSource.includes('Orders close May 18th') &&
+        !storefrontSource.includes('Ends May 18'));
+    const productPageSource = fs.readFileSync(path.join(__dirname, '..', 'product.html'), 'utf8');
+    const productStylesSource = fs.readFileSync(path.join(__dirname, '..', 'product.css'), 'utf8');
+    const supportPageSource = fs.readFileSync(path.join(__dirname, '..', 'support.html'), 'utf8');
+    check('mobile product page exposes a synchronized quick-add bar',
+        productPageSource.includes('id="productMobileBuybar"') &&
+        productStylesSource.includes('.product-mobile-buybar') &&
+        fs.readFileSync(path.join(__dirname, '..', 'product.js'), 'utf8').includes("byId('productMobileAdd').addEventListener('click', addToCart)"));
+    check('storefront footer has no placeholder destinations or unrelated contact number',
+        !storefrontSource.includes('<a href="#" class="hover:text-white transition-colors">') &&
+        !storefrontSource.includes('+233 59 123 4567') &&
+        storefrontSource.includes('tel:+233549193805'));
+    check('customer-care page covers linked support sections',
+        ['id="faqs"', 'id="shipping"', 'id="returns"', 'id="size-guide"', 'id="about"'].every((section) => supportPageSource.includes(section)));
 
     // ---- static frontend ----
-    for (const page of ['/', '/admin.html', '/track.html', '/account.html', '/product.html?id=1']) {
+    for (const page of ['/', '/admin.html', '/track.html', '/account.html', '/product.html?id=1', '/support.html']) {
         const r = await fetch(`${BASE}${page}`);
         check(`serves ${page}`, r.status === 200, `status ${r.status}`);
     }

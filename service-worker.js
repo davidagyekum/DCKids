@@ -9,7 +9,7 @@
    - Images + fonts: cache-first.
    - Bumping VERSION wipes old caches on activate.
 */
-const VERSION = 'dckids-v136';
+const VERSION = 'dckids-v137';
 const STATIC_CACHE = 'dckids-static-' + VERSION;
 const RUNTIME_CACHE = 'dckids-runtime-' + VERSION;
 
@@ -21,6 +21,7 @@ const APP_SHELL = [
   '/admin.html',
   '/account.html',
   '/product.html',
+  '/support.html',
   '/payment-result.html',
   '/styles.css',
   '/product.css',

@@ -634,7 +634,8 @@
   </div>
 
   <!-- ===== DYNAMIC PRODUCT SECTIONS ===== -->
-  <div id="dynamicSections">
+  <div id="shop" style="scroll-margin-top:80px;" aria-hidden="true"></div>
+  <div id="dynamicSections" tabindex="-1">
     <!-- Products organized by category will be injected here by JS -->
   </div>
 
@@ -643,7 +644,7 @@
     <section id="preorderSection" class="hidden pb-16">
       <div class="section-header flex justify-between items-center mb-6">
         <h2 class="text-xl font-semibold text-red-600">China Sourcing Pre-Orders</h2>
-        <span class="text-xs px-3 py-1 bg-red-50 text-red-600 border border-red-100 rounded-full font-medium">Ends May 18</span>
+        <span class="text-xs px-3 py-1 bg-red-50 text-red-600 border border-red-100 rounded-full font-medium">Closing date confirmed on WhatsApp</span>
       </div>
       
       <!-- Info banner -->
@@ -765,7 +766,7 @@
             <i class="fab fa-whatsapp"></i>
           </a>
           <!-- Instagram -->
-          <a href="https://instagram.com" target="_blank" rel="noopener" aria-label="Instagram"
+          <a href="https://www.instagram.com/dckidsbrand" target="_blank" rel="noopener" aria-label="Instagram"
              class="w-9 h-9 rounded-full bg-gray-800 hover:bg-pink-600 hover:text-white flex items-center justify-center transition-colors">
             <i class="fab fa-instagram"></i>
           </a>
@@ -776,11 +777,11 @@
       <div>
         <h4 class="text-white font-semibold text-sm mb-4">Customer Service</h4>
         <ul class="space-y-2.5 text-xs text-gray-400">
-          <li><a href="#" class="hover:text-white transition-colors">FAQs</a></li>
-          <li><a href="#" class="hover:text-white transition-colors">Shipping & Delivery</a></li>
-          <li><a href="#" class="hover:text-white transition-colors">Returns & Exchanges</a></li>
-          <li><a href="#" class="hover:text-white transition-colors">Size Guide</a></li>
-          <li><a href="#" class="hover:text-white transition-colors">Track Your Order</a></li>
+          <li><a href="/support.html#faqs" class="hover:text-white transition-colors">FAQs</a></li>
+          <li><a href="/support.html#shipping" class="hover:text-white transition-colors">Shipping &amp; Delivery</a></li>
+          <li><a href="/support.html#returns" class="hover:text-white transition-colors">Returns &amp; Exchanges</a></li>
+          <li><a href="/support.html#size-guide" class="hover:text-white transition-colors">Size Guide</a></li>
+          <li><a href="/track.html" class="hover:text-white transition-colors">Track Your Order</a></li>
         </ul>
       </div>
       
@@ -788,10 +789,10 @@
       <div>
         <h4 class="text-white font-semibold text-sm mb-4">Policies</h4>
         <ul class="space-y-2.5 text-xs text-gray-400">
-          <li><a href="#" class="hover:text-white transition-colors">Privacy Policy</a></li>
-          <li><a href="#" class="hover:text-white transition-colors">Refund Policy</a></li>
-          <li><a href="#" class="hover:text-white transition-colors">Shipping Policy</a></li>
-          <li><a href="#" class="hover:text-white transition-colors">Terms & Conditions</a></li>
+          <li><a href="/privacy.html" class="hover:text-white transition-colors">Privacy Policy</a></li>
+          <li><a href="/terms.html#returns" class="hover:text-white transition-colors">Refund Policy</a></li>
+          <li><a href="/terms.html#delivery" class="hover:text-white transition-colors">Shipping Policy</a></li>
+          <li><a href="/terms.html" class="hover:text-white transition-colors">Terms &amp; Conditions</a></li>
         </ul>
       </div>
       
@@ -801,7 +802,7 @@
         <p class="text-xs text-gray-400 leading-relaxed">
           We're passionate about bringing stylish, high-quality, and comfortable kids' fashion to families across Ghana.
         </p>
-        <a href="#" class="text-xs text-brand-green hover:underline flex items-center gap-1">
+        <a href="/support.html#about" class="text-xs text-brand-green hover:underline flex items-center gap-1">
           Learn more about us <i class="fas fa-arrow-right text-[10px]"></i>
         </a>
       </div>
@@ -812,15 +813,15 @@
         <ul class="space-y-3 text-xs text-gray-400">
           <li class="flex items-start gap-2">
             <i class="fas fa-phone-alt mt-0.5 text-gray-500"></i>
-            <span>+233 59 123 4567</span>
+            <a href="tel:+233549193805" class="hover:text-white transition-colors">+233 54 919 3805</a>
           </li>
           <li class="flex items-start gap-2">
-            <i class="far fa-envelope mt-0.5 text-gray-500"></i>
-            <span class="break-all">info@dckidsbrand.com</span>
+            <i class="fab fa-whatsapp mt-0.5 text-gray-500"></i>
+            <a href="https://wa.me/233549193805" target="_blank" rel="noopener" class="hover:text-white transition-colors">Chat on WhatsApp</a>
           </li>
           <li class="flex items-start gap-2">
             <i class="fas fa-map-marker-alt mt-0.5 text-gray-500"></i>
-            <span>ECOWAS Plaza Building,<br>Kasoa-Adade, Ghana</span>
+            <a href="https://maps.google.com/?q=ECOWAS+Plaza+Building+Kasoa+Adade+Ghana" target="_blank" rel="noopener" class="hover:text-white transition-colors">ECOWAS Plaza Building,<br>Kasoa-Adade, Ghana</a>
           </li>
         </ul>
       </div>
@@ -832,10 +833,8 @@
         <!-- Payment badges -->
         <div class="flex items-center gap-3">
           <span>We accept:</span>
-          <div class="flex gap-2.5 text-lg">
-            <i class="fab fa-cc-visa text-gray-400 hover:text-white transition-colors"></i>
-            <i class="fab fa-cc-mastercard text-gray-400 hover:text-white transition-colors"></i>
-            <i class="fab fa-cc-paypal text-gray-400 hover:text-white transition-colors"></i>
+          <div class="flex gap-2.5 text-xs text-gray-400">
+            <span>Paystack</span><span>•</span><span>Cards</span><span>•</span><span>Mobile Money</span>
           </div>
         </div>
         

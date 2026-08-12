@@ -174,6 +174,7 @@
 
   function renderProduct() {
     const product = state.product;
+    byId('productMobileBuybar').hidden = false;
     const sizes = getSizes(product);
     state.selectedSize = sizes[0] || 'One Size';
     const category = categoryLabel(product.cat);
@@ -223,6 +224,8 @@
     const priceElement = byId('productPrice');
     const addButton = byId('productAddToCart');
     const addLabel = addButton.querySelector('span');
+    const mobilePrice = byId('productMobilePrice');
+    const mobileAdd = byId('productMobileAdd');
     if (price > 0) {
       priceElement.innerHTML = state.mode === 'wholesale'
         ? `${money(total)}<small>${quantity} pieces at ${money(price)} each · wholesale</small>`
@@ -249,6 +252,9 @@
     byId('assuranceStock').textContent = soldOut ? 'Ask us when this item will return' : (isPreorder ? 'Pre-order item' : 'Available to order');
     addButton.disabled = soldOut || price <= 0;
     addLabel.textContent = soldOut ? 'Out of stock' : (price <= 0 ? 'Ask for price on WhatsApp' : (state.mode === 'wholesale' ? 'Add bulk to cart' : 'Add to cart'));
+    mobilePrice.textContent = price > 0 ? money(total) : 'Price on request';
+    mobileAdd.disabled = addButton.disabled;
+    mobileAdd.textContent = addLabel.textContent;
   }
 
   function renderDetails() {
@@ -568,6 +574,7 @@
     byId('quantityPlus').addEventListener('click', () => { byId('productQuantity').value = String(validQuantity() + Number(byId('productQuantity').step || 1)); validQuantity(); renderPriceAndStock(); updateWhatsAppLink(); });
     byId('productQuantity').addEventListener('change', () => { validQuantity(); renderPriceAndStock(); updateWhatsAppLink(); });
     byId('productAddToCart').addEventListener('click', addToCart);
+    byId('productMobileAdd').addEventListener('click', addToCart);
     byId('productSave').addEventListener('click', toggleWishlist);
     byId('headerWishlist').addEventListener('click', toggleWishlist);
     byId('productRatingLink').addEventListener('click', () => byId('productReviews').scrollIntoView({ behavior: 'smooth' }));

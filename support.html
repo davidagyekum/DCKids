@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#0F4C3A">
+  <meta name="description" content="DC Kids Brand customer care: ordering, delivery, returns, size guidance, contact details, and frequently asked questions.">
+  <title>Customer Care — DC Kids Brand</title>
+  <link rel="icon" href="icon.png" type="image/png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Playfair+Display:wght@600;700&display=swap" rel="stylesheet">
+  <style>
+    :root { --green:#0f4c3a; --sage:#5e9c7e; --ink:#1d2924; --muted:#64716b; --line:#dce6e0; --surface:#fff; --soft:#eef6f1; }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body { margin: 0; background: #fafaf8; color: var(--ink); font-family: Inter, Arial, sans-serif; }
+    a { color: inherit; }
+    .support-header { position: sticky; z-index: 20; top: 0; min-height: 76px; padding: 8px clamp(16px, 5vw, 64px); border-bottom: 1px solid var(--line); background: rgba(250,250,248,.96); backdrop-filter: blur(12px); display: flex; align-items: center; justify-content: space-between; gap: 20px; }
+    .support-brand { width: 72px; height: 58px; display: inline-flex; }
+    .support-brand img { width: 100%; height: 100%; object-fit: contain; }
+    .support-header nav { display: flex; align-items: center; gap: clamp(14px, 3vw, 30px); }
+    .support-header nav a { color: var(--green); font-size: 13px; font-weight: 700; text-decoration: none; }
+    .support-hero { padding: clamp(48px, 8vw, 92px) 20px 46px; background: linear-gradient(135deg, #f6fbf8, #eef6f1); border-bottom: 1px solid var(--line); text-align: center; }
+    .support-hero h1 { max-width: 760px; margin: 0 auto; color: var(--green); font: 600 clamp(40px, 7vw, 68px)/1.05 'Playfair Display', Georgia, serif; letter-spacing: -.025em; }
+    .support-hero p { max-width: 650px; margin: 18px auto 0; color: var(--muted); line-height: 1.7; }
+    .support-actions { margin-top: 26px; display: flex; flex-wrap: wrap; justify-content: center; gap: 12px; }
+    .support-actions a { min-height: 48px; padding: 0 20px; border: 1px solid var(--green); border-radius: 9px; display: inline-flex; align-items: center; justify-content: center; color: var(--green); font-size: 14px; font-weight: 700; text-decoration: none; }
+    .support-actions a:first-child { background: var(--green); color: #fff; }
+    .support-nav { width: min(100% - 32px, 960px); margin: 28px auto 0; display: flex; gap: 9px; overflow-x: auto; padding-bottom: 7px; scrollbar-width: thin; }
+    .support-nav a { flex: 0 0 auto; padding: 9px 13px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); color: var(--green); font-size: 12px; font-weight: 700; text-decoration: none; }
+    .support-main { width: min(100% - 32px, 960px); margin: 0 auto; padding: 24px 0 76px; }
+    .support-section { scroll-margin-top: 94px; padding: 38px 0; border-bottom: 1px solid var(--line); }
+    .support-section:last-child { border-bottom: 0; }
+    .support-section h2 { margin: 0 0 18px; color: var(--green); font: 600 clamp(27px, 4vw, 36px)/1.15 'Playfair Display', Georgia, serif; }
+    .support-section p, .support-section li { color: #46534d; font-size: 14px; line-height: 1.75; }
+    .support-section ul, .support-section ol { margin: 0; padding-left: 22px; }
+    .support-section li + li { margin-top: 8px; }
+    .support-faqs { display: grid; gap: 12px; }
+    details { border: 1px solid var(--line); border-radius: 11px; background: var(--surface); overflow: hidden; }
+    summary { padding: 17px 18px; color: var(--ink); font-size: 14px; font-weight: 700; cursor: pointer; }
+    details p { margin: 0; padding: 0 18px 18px; }
+    .support-note { margin-top: 18px; padding: 16px 18px; border-left: 4px solid var(--sage); border-radius: 8px; background: var(--soft); }
+    .support-footer { padding: 28px 20px; border-top: 1px solid var(--line); background: #f2f6f3; color: var(--muted); text-align: center; font-size: 12px; }
+    .support-footer a { color: var(--green); font-weight: 700; text-decoration: none; }
+    @media (max-width: 560px) {
+      .support-header nav a span { display: none; }
+      .support-header nav { gap: 12px; }
+      .support-hero { padding-top: 40px; }
+      .support-actions { display: grid; }
+      .support-actions a { width: 100%; }
+      .support-section { padding: 30px 0; }
+    }
+    @media (prefers-color-scheme: dark) {
+      :root { --ink:#edf5f1; --muted:#a9b8b1; --line:#31443c; --surface:#14211b; --soft:#1b3026; }
+      body { background:#101a16; color:var(--ink); }
+      .support-header { background:rgba(16,26,22,.96); }
+      .support-hero { background:linear-gradient(135deg,#14211b,#182920); }
+      .support-section p, .support-section li { color:#c7d4ce; }
+      .support-header nav a, .support-nav a, .support-section h2, .support-footer a { color:#a8e1c5; }
+      .support-footer { background:#14211b; }
+    }
+  </style>
+</head>
+<body>
+  <header class="support-header">
+    <a class="support-brand" href="/index.html" aria-label="DC Kids Brand home"><img src="icon.png" alt="DC Kids Brand"></a>
+    <nav aria-label="Customer care navigation">
+      <a href="/index.html"><span>Back to </span>shop</a>
+      <a href="/track.html">Track<span> order</span></a>
+      <a href="/account.html"><span>My </span>account</a>
+    </nav>
+  </header>
+
+  <main>
+    <section class="support-hero">
+      <h1>How can we help?</h1>
+      <p>Find quick answers about ordering, sizing, delivery, and returns—or message DC Kids directly for personal help.</p>
+      <div class="support-actions">
+        <a href="https://wa.me/233549193805" target="_blank" rel="noopener">Chat on WhatsApp</a>
+        <a href="tel:+233549193805">Call +233 54 919 3805</a>
+      </div>
+    </section>
+
+    <nav class="support-nav" aria-label="On this page">
+      <a href="#faqs">FAQs</a><a href="#shipping">Delivery</a><a href="#returns">Returns</a><a href="#size-guide">Size guide</a><a href="#about">About us</a>
+    </nav>
+
+    <div class="support-main">
+      <section id="faqs" class="support-section">
+        <h2>Frequently asked questions</h2>
+        <div class="support-faqs">
+          <details><summary>Do I need an account to order?</summary><p>No. You can browse and checkout as a guest. Signing in is optional and helps you keep your order history, addresses, wishlist, and reviews together.</p></details>
+          <details><summary>Can I order through WhatsApp?</summary><p>Yes. Choose WhatsApp checkout to create a pending order and open a pre-filled message. DC Kids will confirm availability, delivery, and payment with you in the chat.</p></details>
+          <details><summary>How does direct Paystack payment work?</summary><p>Paystack charges the products in your cart. Delivery is calculated separately, and DC Kids contacts you using the details submitted at checkout.</p></details>
+          <details><summary>How do China pre-orders work?</summary><p>Select a preorder item or send us a photo on WhatsApp. We will confirm the current closing date, deposit, estimated arrival time, and balance before you commit.</p></details>
+        </div>
+      </section>
+
+      <section id="shipping" class="support-section">
+        <h2>Shipping and delivery</h2>
+        <ul>
+          <li>DC Kids delivers nationwide in Ghana through third-party riders and transport services.</li>
+          <li>Delivery is not included in the Paystack product total; the cost depends on your location and is confirmed separately.</li>
+          <li>Provide a reachable phone number, full address, city or area, region, and a helpful landmark at checkout.</li>
+          <li>For an order update, use the tracking page or message us with your order number.</li>
+        </ul>
+        <p class="support-note"><a href="/track.html">Track an existing order</a> or <a href="https://wa.me/233549193805" target="_blank" rel="noopener">ask about delivery on WhatsApp</a>.</p>
+      </section>
+
+      <section id="returns" class="support-section">
+        <h2>Returns and exchanges</h2>
+        <p>Tell us on WhatsApp within <strong>48 hours of delivery</strong> if an item is defective, damaged, or different from what you ordered. Keep the item unworn, unwashed, and in its original packaging while we review it.</p>
+        <p>Hygiene-sensitive, worn, washed, or unpackaged items cannot be returned unless they were defective. See the complete conditions in our <a href="/terms.html#returns">Terms of Service</a>.</p>
+      </section>
+
+      <section id="size-guide" class="support-section">
+        <h2>Size guide</h2>
+        <p>Available size labels and prices appear on each product page. Children grow differently and supplier measurements can vary, so age labels are a starting point—not a guaranteed fit.</p>
+        <ol>
+          <li>Compare the listed size with clothing or shoes that currently fit your child.</li>
+          <li>When unsure between two sizes, send the product link and the child’s measurements on WhatsApp.</li>
+          <li>Confirm the selected size in your cart before sending the order or paying.</li>
+        </ol>
+      </section>
+
+      <section id="about" class="support-section">
+        <h2>About DC Kids</h2>
+        <p>DC Kids Brand brings stylish, comfortable children’s fashion and baby essentials to families across Ghana, serving both retail customers and wholesale resellers.</p>
+        <p>Visit us at <a href="https://maps.google.com/?q=ECOWAS+Plaza+Building+Kasoa+Adade+Ghana" target="_blank" rel="noopener">ECOWAS Plaza Building, Kasoa-Adade, Ghana</a>, or follow <a href="https://www.instagram.com/dckidsbrand" target="_blank" rel="noopener">@dckidsbrand on Instagram</a> and <a href="https://www.tiktok.com/@dckidsbrand" target="_blank" rel="noopener">TikTok</a>.</p>
+      </section>
+    </div>
+  </main>
+
+  <footer class="support-footer">© 2026 DC Kids Brand · <a href="/privacy.html">Privacy</a> · <a href="/terms.html">Terms</a></footer>
+</body>
+</html>
