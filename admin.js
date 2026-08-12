@@ -52,6 +52,7 @@ let analyticsRefreshTimer = null;
 let dashboardRevenuePeriod = 'monthly';
 let dashboardAnalyticsData = null;
 let dashboardLoadSequence = 0;
+let adminAuditLog = [];
 
 // Pagination state — smaller pages on mobile keep the DOM light & fast
 const IS_MOBILE_VP = (typeof window !== 'undefined') && window.innerWidth <= 768;
@@ -117,7 +118,6 @@ function fetchOrdersFromServer(callback) {
                     }) : []
                 };
             });
-            syncCustomersWithOrders();
             detectNewOrders(window.adminOrders);
             startOrderNotificationPolling();
         }
@@ -169,93 +169,56 @@ function startOrderNotificationPolling() {
 function saveOrders(orders) {
     // Deprecated for direct API saving
 }
+window.adminCustomers = [];
+
 function getCustomers() {
-    try { return JSON.parse(localStorage.getItem('dcKidsCustomers')) || []; }
-    catch (e) { return []; }
-}
-function saveCustomers(customers) {
-    localStorage.setItem('dcKidsCustomers', JSON.stringify(customers));
-}
-function customerMatchesOrder(c, o) {
-    var nameMatch = o.customer && c.name && o.customer.toLowerCase().trim() === c.name.toLowerCase().trim();
-    var phoneMatch = o.phone && c.phone && o.phone.replace(/[^0-9]/g, '') === c.phone.replace(/[^0-9]/g, '');
-    return nameMatch || phoneMatch;
+    return window.adminCustomers || [];
 }
 
-function syncCustomersWithOrders() {
-    var customers = getCustomers();
-    var orders = getOrders() || [];
-    var updated = false;
+function normalizeAdminCustomer(customer) {
+    var row = customer || {};
+    return {
+        id: String(row.id || ''),
+        accountId: row.customer_account_id || null,
+        registered: Number(row.registered_account || 0) === 1,
+        name: row.name || 'Customer',
+        email: row.email || '',
+        phone: row.phone || '',
+        address: row.address || '',
+        city: row.city || '',
+        country: row.country || 'Ghana',
+        group: row.customer_group || row.group || 'Retail',
+        notes: row.notes || '',
+        joinDate: row.created_at || row.joinDate || '',
+        lastOrderAt: row.last_order_at || '',
+        totalSpent: Number(row.total_spent || row.totalSpent || 0),
+        orderCount: Number(row.order_count || row.orderCount || 0),
+        status: row.status === 'inactive' ? 'inactive' : 'active'
+    };
+}
 
-    // 1. Refresh order count / spend / status for customers already on the list.
-    var updatedCustomers = customers.map(function(c) {
-        var customerOrders = orders.filter(function(o) { return customerMatchesOrder(c, o); });
-
-        var newOrderCount = customerOrders.length;
-        var newTotalSpent = customerOrders.reduce(function(sum, o) {
-            return sum + (o.total || 0);
-        }, 0);
-
-        var newStatus = c.status || 'inactive';
-        if (newOrderCount > 0 && (c.orderCount === 0 || !c.status)) {
-            newStatus = 'active';
-        } else if (newOrderCount === 0) {
-            newStatus = 'inactive';
-        }
-
-        if (c.orderCount !== newOrderCount || c.totalSpent !== newTotalSpent || c.status !== newStatus) {
-            c.orderCount = newOrderCount;
-            c.totalSpent = newTotalSpent;
-            c.status = newStatus;
-            updated = true;
-        }
-        return c;
+async function fetchCustomersFromServer() {
+    var token = localStorage.getItem('adminToken');
+    if (!token) throw new Error('Authentication required');
+    var response = await fetch(API_URL + '/admin/customers', {
+        headers: { 'Authorization': 'Bearer ' + token }
     });
-
-    // 2. Auto-add anyone who placed an order but isn't on the list yet.
-    var maxId = 0;
-    updatedCustomers.forEach(function(c) {
-        var m = /CUST-(\d+)/.exec(c.id || '');
-        if (m) maxId = Math.max(maxId, parseInt(m[1], 10));
-    });
-    orders.forEach(function(o) {
-        if (!o.customer && !o.phone) return;
-        if (updatedCustomers.some(function(c) { return customerMatchesOrder(c, o); })) return;
-
-        var theirOrders = orders.filter(function(x) {
-            var nameMatch = x.customer && o.customer && x.customer.toLowerCase().trim() === o.customer.toLowerCase().trim();
-            var phoneMatch = x.phone && o.phone && x.phone.replace(/[^0-9]/g, '') === o.phone.replace(/[^0-9]/g, '');
-            return nameMatch || phoneMatch;
-        });
-        maxId += 1;
-        updatedCustomers.push({
-            id: 'CUST-' + String(maxId).padStart(3, '0'),
-            name: o.customer || 'Unknown',
-            email: '',
-            phone: o.phone || '',
-            address: '',
-            city: o.delivery_area || '',
-            country: 'Ghana',
-            group: '',
-            notes: 'Auto-added from order ' + (o.id || ''),
-            joinDate: o.date ? String(o.date).split('T')[0] : new Date().toISOString().split('T')[0],
-            totalSpent: theirOrders.reduce(function(s, x) { return s + (x.total || 0); }, 0),
-            orderCount: theirOrders.length,
-            status: 'active'
-        });
-        updated = true;
-    });
-
-    if (updated) {
-        saveCustomers(updatedCustomers);
+    if (response.status === 401 || response.status === 403) {
+        handleSessionExpiry();
+        throw new Error('Session expired');
     }
+    if (!response.ok) throw new Error('Customer directory unavailable');
+    var rows = await response.json();
+    window.adminCustomers = Array.isArray(rows) ? rows.map(normalizeAdminCustomer) : [];
+    return window.adminCustomers;
 }
+window.adminSuppliers = [];
+
 function getSuppliers() {
-    try { return JSON.parse(localStorage.getItem('dcKidsSuppliers')) || []; }
-    catch (e) { return []; }
+    return window.adminSuppliers || [];
 }
 function saveSuppliers(suppliers) {
-    localStorage.setItem('dcKidsSuppliers', JSON.stringify(suppliers));
+    window.adminSuppliers = Array.isArray(suppliers) ? suppliers : [];
 }
 function getSettings() {
     var defaults = {
@@ -1136,6 +1099,9 @@ function loadDashboard() {
     document.body.classList.add('dash-active');
     var loadId = ++dashboardLoadSequence;
     setDashboardLoading(true);
+    loadAuditLog().catch(function(error) {
+        console.warn('Audit log unavailable:', error && error.message ? error.message : error);
+    });
 
     fetchProducts().then(function(products) {
         globalProducts = products;
@@ -1469,11 +1435,12 @@ function renderActivityTimeline() {
     var container = document.getElementById('activity-timeline');
     if (!container) return;
 
-    var activities = (getOrders() || []).slice(0, 8).map(function(order) {
+    var activities = adminAuditLog.slice(0, 8).map(function(entry) {
         return {
-            type: 'order',
-            message: (order.id || 'Order') + ' from ' + (order.customer || 'Guest') + ' is ' + String(order.status || 'pending').replace(/_/g, ' '),
-            timestamp: order.date || new Date().toISOString()
+            type: entry.entity_type || 'system',
+            message: entry.summary || 'Admin change',
+            actor: entry.actor_username || 'Admin',
+            timestamp: entry.created_at || new Date().toISOString()
         };
     });
     var html = '';
@@ -1481,9 +1448,54 @@ function renderActivityTimeline() {
                 html += '<div style="display:flex;align-items:flex-start;gap:12px;padding:12px 0;border-bottom:1px solid ' + '#f5f5f5' + ';">';
         html += '<span style="display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;border-radius:9px;background:' + '#F4F4F7' + ';color:' + '#555' + ';flex-shrink:0;">' + entityGlyph(a.type) + '</span>';
         html += '<div style="flex:1;"><div style="font-size:13px;color:' + '#333' + ';">' + escapeHtml(a.message) + '</div>';
-        html += '<div style="font-size:11px;color:#999;margin-top:2px;">' + timeAgo(new Date(a.timestamp)) + '</div></div></div>';
+        html += '<div style="font-size:11px;color:#999;margin-top:2px;">' + escapeHtml(a.actor) + ' &middot; ' + timeAgo(parseServerDate(a.timestamp)) + '</div></div></div>';
     });
-    container.innerHTML = html || '<div style="color:#888;font-size:14px;padding:16px;">No store orders yet</div>';
+    container.innerHTML = html || '<div style="color:#888;font-size:14px;padding:16px;">No admin changes recorded yet</div>';
+}
+
+async function loadAuditLog() {
+    var token = localStorage.getItem('adminToken');
+    if (!token) throw new Error('Authentication required');
+    var response = await fetch(API_URL + '/admin/audit-log?limit=100', {
+        headers: { 'Authorization': 'Bearer ' + token }
+    });
+    if (response.status === 401 || response.status === 403) {
+        handleSessionExpiry();
+        throw new Error('Session expired');
+    }
+    if (!response.ok) throw new Error('Audit log request failed');
+    var rows = await response.json();
+    adminAuditLog = Array.isArray(rows) ? rows : [];
+    renderActivityTimeline();
+    renderAuditLogList();
+    return adminAuditLog;
+}
+
+function renderAuditLogList() {
+    var container = document.getElementById('audit-log-list');
+    if (!container) return;
+    if (!adminAuditLog.length) {
+        container.innerHTML = '<div class="audit-log-empty">No admin changes recorded yet.</div>';
+        return;
+    }
+    container.innerHTML = adminAuditLog.map(function(entry) {
+        var entity = String(entry.entity_type || 'system').replace(/_/g, ' ');
+        return '<article class="audit-log-row">' +
+            '<span class="audit-log-icon" aria-hidden="true">' + entityGlyph(entry.entity_type || 'system') + '</span>' +
+            '<div class="audit-log-copy"><strong>' + escapeHtml(entry.summary || 'Admin change') + '</strong>' +
+            '<span>' + escapeHtml(entry.actor_username || 'Admin') + ' &middot; ' + escapeHtml(entity) +
+            (entry.entity_id ? ' #' + escapeHtml(String(entry.entity_id)) : '') + '</span></div>' +
+            '<time datetime="' + escapeHtml(entry.created_at || '') + '">' + timeAgo(parseServerDate(entry.created_at || Date.now())) + '</time>' +
+            '</article>';
+    }).join('');
+}
+
+function openAuditLogModal() {
+    openModal('modal-audit-log');
+    renderAuditLogList();
+    loadAuditLog().catch(function(error) {
+        showToast(error.message || 'Activity log could not be loaded', 'error');
+    });
 }
 
 function renderDashboardRecentProducts(products) {
@@ -1526,7 +1538,7 @@ function renderDashboardRecentProducts(products) {
         tbody.appendChild(tr);
     });
 
-    // Add pagination below recent products table
+    // Keep the count honest; this compact dashboard preview is not paginated.
     var section = tbody.closest('.recent-products-section');
     if (section) {
         var existingPag = section.querySelector('.dashboard-pagination');
@@ -1535,17 +1547,7 @@ function renderDashboardRecentProducts(products) {
             pagDiv.className = 'dashboard-pagination';
             pagDiv.style.cssText = 'display: flex; justify-content: space-between; align-items: center; padding: 16px 0; border-top: 1px solid var(--border); margin-top: 8px;';
             pagDiv.innerHTML =
-                '<span style="font-size: 13px; color: var(--text-secondary);">Showing 1 to ' + Math.min(5, (products || []).length) + ' of ' + formatNumber((products || []).length) + ' results</span>' +
-                '<div style="display: flex; gap: 4px; align-items: center;">' +
-                    '<button style="width: 32px; height: 32px; border: 1px solid var(--border); border-radius: 6px; background: var(--card-bg); color: var(--text-secondary); display: flex; align-items: center; justify-content: center; cursor: pointer; font-size: 14px;">&lt;</button>' +
-                    '<button style="width: 32px; height: 32px; border: none; border-radius: 6px; background: var(--primary); color: #fff; font-weight: 600; font-size: 13px; cursor: pointer;">1</button>' +
-                    '<button style="width: 32px; height: 32px; border: 1px solid var(--border); border-radius: 6px; background: var(--card-bg); color: var(--text-primary); font-size: 13px; cursor: pointer;">2</button>' +
-                    '<button style="width: 32px; height: 32px; border: 1px solid var(--border); border-radius: 6px; background: var(--card-bg); color: var(--text-primary); font-size: 13px; cursor: pointer;">3</button>' +
-                    '<button style="width: 32px; height: 32px; border: 1px solid var(--border); border-radius: 6px; background: var(--card-bg); color: var(--text-primary); font-size: 13px; cursor: pointer;">4</button>' +
-                    '<span style="color: var(--text-secondary); font-size: 13px; padding: 0 4px;">...</span>' +
-                    '<button style="width: 36px; height: 32px; border: 1px solid var(--border); border-radius: 6px; background: var(--card-bg); color: var(--text-primary); font-size: 13px; cursor: pointer;">249</button>' +
-                    '<button style="width: 32px; height: 32px; border: 1px solid var(--border); border-radius: 6px; background: var(--card-bg); color: var(--text-secondary); display: flex; align-items: center; justify-content: center; cursor: pointer; font-size: 14px;">&gt;</button>' +
-                '</div>';
+                '<span style="font-size: 13px; color: var(--text-secondary);">Showing the newest ' + Math.min(5, (products || []).length) + ' of ' + formatNumber((products || []).length) + ' products</span>';
             section.appendChild(pagDiv);
         }
     }
@@ -3001,9 +3003,17 @@ function updateCustomerStats() {
 }
 
 function loadCustomers() {
-    syncCustomersWithOrders();
-    updateCustomerStats();
-    renderCustomersTable();
+    var tbody = document.getElementById('customers-tbody');
+    if (tbody) tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:#888;padding:40px;">Loading customers...</td></tr>';
+    fetchCustomersFromServer()
+        .then(function() {
+            updateCustomerStats();
+            renderCustomersTable();
+        })
+        .catch(function(error) {
+            if (tbody) tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:#b42318;padding:40px;">Customer data could not be loaded. Refresh to try again.</td></tr>';
+            console.warn('Customer directory unavailable:', error && error.message ? error.message : error);
+        });
 }
 
 
@@ -3018,7 +3028,7 @@ function renderCustomersTable() {
 
     tbody.innerHTML = '';
     if (paged.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:#888;padding:40px;">No customers found</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:#888;padding:40px;">No customers found</td></tr>';
     } else {
         paged.forEach(function(c) {
             var tr = document.createElement('tr');
@@ -3029,7 +3039,8 @@ function renderCustomersTable() {
                 '<td data-label="Phone">' + escapeHtml(c.phone) + '</td>' +
                 '<td data-label="Orders" style="text-align:center;">' + (c.orderCount || 0) + '</td>' +
                 '<td data-label="Total Spent" style="font-weight:600;">GHS ' + formatNumber(c.totalSpent || 0) + '</td>' +
-                '<td data-label="Status"><span class="status-pill ' + (c.status === 'active' ? 'active' : 'inactive') + '">' + escapeHtml(c.status) + '</span></td>' +
+                '<td data-label="Status"><span class="status-pill ' + (c.status === 'active' ? 'active' : 'inactive') + '">' + escapeHtml(c.status) + '</span>' +
+                    (c.registered ? '<span class="customer-account-mark" title="Firebase customer account">Account</span>' : '') + '</td>' +
                 '<td data-label="Actions"><div class="table-actions">' +
                     '<button class="action-icon view-icon" title="View details" onclick="event.stopPropagation(); openCustomerDetail(\'' + c.id + '\')"><svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button>' +
                     '<button class="action-icon edit-icon" title="Edit" onclick="event.stopPropagation(); openCustomerModal(\'' + c.id + '\')"><svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg></button>' +
@@ -3063,12 +3074,13 @@ function openCustomerModal(customerId) {
 
     var customer = null;
     if (customerId) {
-        customer = getCustomers().find(function(c) { return c.id === customerId; });
+        customer = getCustomers().find(function(c) { return String(c.id) === String(customerId); });
     }
 
     var titleEl = modal.querySelector('.modal-title') || modal.querySelector('.modal-header h2') || modal.querySelector('.modal-header h3');
     var nameEl = document.getElementById('modal-cust-name');
     var phoneEl = document.getElementById('modal-cust-phone');
+    var emailEl = document.getElementById('modal-cust-email');
     var addressEl = document.getElementById('modal-cust-address');
     var statusEl = document.getElementById('modal-cust-status');
     var idEl = document.getElementById('modal-cust-id');
@@ -3077,6 +3089,7 @@ function openCustomerModal(customerId) {
         if (titleEl) titleEl.textContent = 'Edit Customer';
         if (nameEl) nameEl.value = customer.name;
         if (phoneEl) phoneEl.value = customer.phone;
+        if (emailEl) emailEl.value = customer.email || '';
         if (addressEl) addressEl.value = customer.address || '';
         if (statusEl) statusEl.value = customer.status;
         if (idEl) idEl.value = customer.id;
@@ -3084,6 +3097,7 @@ function openCustomerModal(customerId) {
         if (titleEl) titleEl.textContent = 'Add Customer';
         if (nameEl) nameEl.value = '';
         if (phoneEl) phoneEl.value = '';
+        if (emailEl) emailEl.value = '';
         if (addressEl) addressEl.value = '';
         if (statusEl) statusEl.value = 'inactive';
         if (idEl) idEl.value = '';
@@ -3092,7 +3106,7 @@ function openCustomerModal(customerId) {
     openModal('modal-customer');
 }
 
-function saveCustomer() {
+async function saveCustomer() {
     var idEl = document.getElementById('modal-cust-id');
     var nameEl = document.getElementById('modal-cust-name');
     var phoneEl = document.getElementById('modal-cust-phone');
@@ -3104,49 +3118,54 @@ function saveCustomer() {
         return;
     }
 
-    var customers = getCustomers();
     var id = idEl ? idEl.value : '';
-
-    if (id) {
-        customers = customers.map(function(c) {
-            if (c.id === id) {
-                c.name = nameEl.value.trim();
-                c.phone = phoneEl ? phoneEl.value.trim() : c.phone;
-                c.address = addressEl ? addressEl.value.trim() : c.address;
-                c.status = statusEl ? statusEl.value : c.status;
-            }
-            return c;
+    if (!id) return openAddCustomerModal();
+    var existing = getCustomers().find(function(customer) { return String(customer.id) === String(id); });
+    if (!existing) return showToast('Customer not found', 'error');
+    var button = document.getElementById('save-customer-btn');
+    if (button) { button.disabled = true; button.textContent = 'Saving...'; }
+    try {
+        var response = await fetch(API_URL + '/admin/customers/' + encodeURIComponent(id), {
+            method: 'PUT',
+            headers: {
+                'Authorization': 'Bearer ' + localStorage.getItem('adminToken'),
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                name: nameEl.value.trim(),
+                phone: phoneEl ? phoneEl.value.trim() : existing.phone,
+                address: addressEl ? addressEl.value.trim() : existing.address,
+                city: existing.city,
+                country: existing.country,
+                customer_group: existing.group,
+                notes: existing.notes,
+                status: statusEl ? statusEl.value : existing.status
+            })
         });
-        addActivity('customer', 'Updated customer: ' + nameEl.value.trim());
-    } else {
-        var newId = 'CUST-' + String(customers.length + 1).padStart(3, '0');
-        customers.push({
-            id: newId,
-            name: nameEl.value.trim(),
-            email: '',
-            phone: phoneEl ? phoneEl.value.trim() : '',
-            address: addressEl ? addressEl.value.trim() : '',
-            joinDate: new Date().toISOString().split('T')[0],
-            totalSpent: 0,
-            orderCount: 0,
-            status: statusEl ? statusEl.value : 'inactive'
-        });
-        addActivity('customer', 'Added new customer: ' + nameEl.value.trim());
+        var data = await response.json().catch(function() { return {}; });
+        if (!response.ok) throw new Error(data.error || 'Customer could not be saved');
+        closeModal('modal-customer');
+        showToast('Customer updated', 'success');
+        await fetchCustomersFromServer();
+        updateCustomerStats();
+        renderCustomersTable();
+        loadAuditLog();
+    } catch (error) {
+        showToast(error.message || 'Customer could not be saved', 'error');
+    } finally {
+        if (button) { button.disabled = false; button.textContent = 'Save Customer'; }
     }
-
-    saveCustomers(customers);
-    closeModal('modal-customer');
-    showToast(id ? 'Customer updated' : 'Customer added', 'success');
-    loadCustomers();
 }
 
 /* ============================================================
    SECTION 17: SUPPLIERS TAB
    ============================================================ */
 function loadSuppliers() {
+    var tbody = document.getElementById('suppliers-tbody');
+    if (tbody) tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:#888;padding:40px;">Loading suppliers...</td></tr>';
     fetchSuppliers(function() {
         renderSuppliersTable();
-    });
+    }).catch(function() {});
 }
 
 function normalizeSupplierRecord(s) {
@@ -3172,12 +3191,9 @@ function normalizeSupplierList(list) {
 
 function fetchSuppliers(callback) {
     var token = localStorage.getItem('adminToken');
-    if (!token || token.indexOf('fallback-token') === 0) {
-        if (callback) callback();
-        return;
-    }
+    if (!token) return Promise.reject(new Error('Authentication required'));
 
-    fetch(API_URL + '/suppliers', {
+    return fetch(API_URL + '/suppliers', {
         headers: { 'Authorization': 'Bearer ' + token }
     })
     .then(function(res) {
@@ -3191,8 +3207,10 @@ function fetchSuppliers(callback) {
         if (callback) callback();
     })
     .catch(function(err) {
-        console.warn('Using local supplier data:', err.message);
-        if (callback) callback();
+        var tbody = document.getElementById('suppliers-tbody');
+        if (tbody) tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:#b42318;padding:40px;">Supplier data could not be loaded. Refresh to try again.</td></tr>';
+        console.warn('Supplier directory unavailable:', err.message);
+        throw err;
     });
 }
 
@@ -3380,33 +3398,29 @@ async function saveSupplier() {
 
     try {
         var token = localStorage.getItem('adminToken');
-        if (token && token.indexOf('fallback-token') !== 0) {
-            var res = await fetch(API_URL + '/suppliers' + (id ? '/' + encodeURIComponent(id) : ''), {
-                method: id ? 'PUT' : 'POST',
-                headers: {
-                    'Authorization': 'Bearer ' + token,
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify(payload)
-            });
+        if (!token) throw new Error('Your admin session has expired');
+        var res = await fetch(API_URL + '/suppliers' + (id ? '/' + encodeURIComponent(id) : ''), {
+            method: id ? 'PUT' : 'POST',
+            headers: {
+                'Authorization': 'Bearer ' + token,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(payload)
+        });
 
-            if (!res.ok) {
-                var errData = await res.json().catch(function() { return {}; });
-                throw new Error(errData.error || 'Failed to save supplier');
-            }
-
-            await res.json();
-            fetchSuppliers(function() {
-                renderSuppliersTable();
-            });
-        } else {
-            saveSupplierLocally(payload, id);
-            renderSuppliersTable();
+        if (!res.ok) {
+            var errData = await res.json().catch(function() { return {}; });
+            throw new Error(errData.error || 'Failed to save supplier');
         }
+
+        await res.json();
+        await fetchSuppliers(function() {
+            renderSuppliersTable();
+        });
 
         closeModal('modal-supplier');
         showToast(id ? 'Supplier updated successfully!' : 'Supplier added successfully!', 'success');
-        addActivity('supplier', (id ? 'Updated supplier: ' : 'Added new supplier: ') + payload.supplier_name);
+        loadAuditLog();
     } catch (err) {
         showToast(err.message || 'Failed to save supplier', 'error');
     } finally {
@@ -3528,32 +3542,6 @@ function setSupplierProductsSelect(value) {
     Array.prototype.slice.call(productsEl.options).forEach(function(option) {
         option.selected = selected.indexOf(option.value) >= 0;
     });
-}
-
-function saveSupplierLocally(payload, id) {
-    var suppliers = normalizeSupplierList(getSuppliers());
-    var record = normalizeSupplierRecord({
-        id: id || 'SUP-' + String(suppliers.length + 1).padStart(3, '0'),
-        supplier_name: payload.supplier_name,
-        contact_person: payload.contact_person,
-        email: payload.email,
-        phone: payload.phone,
-        business_address: payload.business_address,
-        products_supplied: payload.products_supplied,
-        status: payload.status,
-        notes: payload.notes,
-        supplier_logo: payload.supplier_logo
-    });
-
-    if (id) {
-        suppliers = suppliers.map(function(s) {
-            return String(s.id) === String(id) ? record : s;
-        });
-    } else {
-        suppliers.unshift(record);
-    }
-
-    saveSuppliers(suppliers);
 }
 
 function setSupplierSaveLoading(isLoading) {
@@ -6443,7 +6431,18 @@ function formatNumber(n) {
     return Number(n).toLocaleString();
 }
 
+function parseServerDate(value) {
+    if (value instanceof Date) return value;
+    var raw = String(value || '').trim();
+    // SQLite CURRENT_TIMESTAMP is UTC but omits both the T and timezone.
+    if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(raw)) {
+        raw = raw.replace(' ', 'T') + 'Z';
+    }
+    return new Date(raw || Date.now());
+}
+
 function timeAgo(date) {
+    if (!(date instanceof Date) || Number.isNaN(date.getTime())) return '—';
     var diff = Date.now() - date.getTime();
     var seconds = Math.floor(diff / 1000);
     if (seconds < 60) return 'Just now';
@@ -7053,7 +7052,7 @@ function setupEventListeners() {
     if (dashboardExport) dashboardExport.addEventListener('click', exportDashboardRevenue);
 
     var dashboardViewOrders = document.getElementById('dashboard-view-orders');
-    if (dashboardViewOrders) dashboardViewOrders.addEventListener('click', function() { switchTab('tab-orders'); });
+    if (dashboardViewOrders) dashboardViewOrders.addEventListener('click', openAuditLogModal);
 
     document.querySelectorAll('[data-dashboard-target]').forEach(function(card) {
         function openTarget() {
@@ -7651,6 +7650,7 @@ function openAddCustomerModal() {
 
     // Reset inputs
     document.getElementById('add-customer-name').value = '';
+    document.getElementById('add-customer-email').value = '';
     document.getElementById('add-customer-phone').value = '';
     document.getElementById('add-customer-address').value = '';
     document.getElementById('add-customer-city').value = '';
@@ -7668,8 +7668,9 @@ function closeAddCustomerModal() {
     if (modal) modal.style.display = 'none';
 }
 
-function saveNewCustomer() {
+async function saveNewCustomer() {
     var nameEl = document.getElementById('add-customer-name');
+    var emailEl = document.getElementById('add-customer-email');
     var phoneEl = document.getElementById('add-customer-phone');
     var addressEl = document.getElementById('add-customer-address');
     var cityEl = document.getElementById('add-customer-city');
@@ -7686,36 +7687,46 @@ function saveNewCustomer() {
         return;
     }
 
-    var customers = getCustomers();
-    var newId = 'CUST-' + String(customers.length + 1).padStart(3, '0');
-
     // Prepend the selected dialing code unless the number already carries one.
     var rawPhone = phoneEl.value.trim();
     var codeEl = document.getElementById('add-customer-country-code');
     var dialCode = (codeEl && codeEl.value) ? codeEl.value : '+233';
     var finalPhone = rawPhone.startsWith('+') ? rawPhone : dialCode + rawPhone.replace(/^0+/, '');
 
-    customers.push({
-        id: newId,
-        name: nameEl.value.trim(),
-        email: '',
-        phone: finalPhone,
-        address: addressEl ? addressEl.value.trim() : '',
-        city: cityEl ? cityEl.value.trim() : '',
-        country: countryEl ? countryEl.value : 'Ghana',
-        group: groupEl ? groupEl.value : '',
-        notes: notesEl ? notesEl.value.trim() : '',
-        joinDate: new Date().toISOString().split('T')[0],
-        totalSpent: 0,
-        orderCount: 0,
-        status: 'inactive'
-    });
-
-    addActivity('customer', 'Added new customer: ' + nameEl.value.trim());
-    saveCustomers(customers);
-    closeAddCustomerModal();
-    showToast('Customer added successfully', 'success');
-    loadCustomers();
+    var button = document.getElementById('add-customer-save-btn');
+    if (button) { button.disabled = true; button.classList.add('is-loading'); }
+    try {
+        var response = await fetch(API_URL + '/admin/customers', {
+            method: 'POST',
+            headers: {
+                'Authorization': 'Bearer ' + localStorage.getItem('adminToken'),
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                name: nameEl.value.trim(),
+                email: emailEl ? emailEl.value.trim().toLowerCase() : '',
+                phone: finalPhone,
+                address: addressEl ? addressEl.value.trim() : '',
+                city: cityEl ? cityEl.value.trim() : '',
+                country: countryEl ? countryEl.value : 'Ghana',
+                customer_group: groupEl && groupEl.value ? groupEl.value : 'Retail',
+                notes: notesEl ? notesEl.value.trim() : '',
+                status: 'active'
+            })
+        });
+        var data = await response.json().catch(function() { return {}; });
+        if (!response.ok) throw new Error(data.error || 'Customer could not be added');
+        closeAddCustomerModal();
+        showToast('Customer added successfully', 'success');
+        await fetchCustomersFromServer();
+        updateCustomerStats();
+        renderCustomersTable();
+        loadAuditLog();
+    } catch (error) {
+        showToast(error.message || 'Customer could not be added', 'error');
+    } finally {
+        if (button) { button.disabled = false; button.classList.remove('is-loading'); }
+    }
 }
 
 
@@ -8834,19 +8845,30 @@ function closeCustomerDetail() {
     document.body.style.overflow = '';
 }
 
-function saveCustomerDetailNotes() {
+async function saveCustomerDetailNotes() {
     var modal = document.getElementById('modal-customer-detail');
     var customerId = modal ? modal.getAttribute('data-customer-id') : null;
     if (!customerId) return;
     var notesEl = document.getElementById('cust-detail-notes');
     var notes = notesEl ? notesEl.value.trim() : '';
-    var customers = getCustomers();
-    customers = customers.map(function(c) {
-        if (String(c.id) === String(customerId)) c.notes = notes;
-        return c;
-    });
-    saveCustomers(customers);
-    showToast('Notes saved', 'success');
+    try {
+        var response = await fetch(API_URL + '/admin/customers/' + encodeURIComponent(customerId) + '/notes', {
+            method: 'PATCH',
+            headers: {
+                'Authorization': 'Bearer ' + localStorage.getItem('adminToken'),
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ notes: notes })
+        });
+        var data = await response.json().catch(function() { return {}; });
+        if (!response.ok) throw new Error(data.error || 'Notes could not be saved');
+        var customer = getCustomers().find(function(item) { return String(item.id) === String(customerId); });
+        if (customer) customer.notes = notes;
+        showToast('Notes saved', 'success');
+        loadAuditLog();
+    } catch (error) {
+        showToast(error.message || 'Notes could not be saved', 'error');
+    }
 }
 
 // ============================================================

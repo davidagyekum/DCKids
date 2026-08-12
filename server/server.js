@@ -758,6 +758,11 @@ app.put('/api/settings', authenticateToken, requireManager, (req, res) => {
         [whatsapp_number, wholesale_enabled ? 1 : 0, wholesale_moq, wholesale_discount, banner_enabled ? 1 : 0, banner_text],
         function(err) {
             if (err) return serverError(res, err);
+            logAdminAction(req, 'update', 'settings', 'store', 'Updated storefront settings', {
+                whatsapp_enabled: !!whatsapp_number,
+                wholesale_enabled: !!wholesale_enabled,
+                banner_enabled: !!banner_enabled
+            });
             res.json({ success: true, message: 'Settings updated successfully' });
         }
     );
@@ -838,6 +843,7 @@ app.post('/api/products', authenticateToken, requireManager, (req, res) => {
             function (err) {
                 if (isDuplicateSku(err)) return res.status(409).json({ error: 'That SKU is already in use by another product.' });
                 if (err) return serverError(res, err);
+                logAdminAction(req, 'create', 'product', this.lastID, `Added product: ${name || finalSku || this.lastID}`);
                 res.json({ id: this.lastID, sku: finalSku || null });
             }
         );
@@ -863,6 +869,7 @@ app.put('/api/products/:id', authenticateToken, requireManager, (req, res) => {
         function (err) {
             if (isDuplicateSku(err)) return res.status(409).json({ error: 'That SKU is already in use by another product.' });
             if (err) return serverError(res, err);
+            if (this.changes) logAdminAction(req, 'update', 'product', req.params.id, `Updated product: ${name || req.params.id}`);
             res.json({ changes: this.changes });
         }
     );
@@ -883,6 +890,7 @@ app.delete('/api/products/:id', authenticateToken, requireManager, (req, res) =>
                 if (err3) return serverError(res, err3);
                 db.run(`DELETE FROM products WHERE id = ?`, [productId], function (err4) {
                     if (err4) return serverError(res, err4);
+                    if (this.changes) logAdminAction(req, 'delete', 'product', productId, `Deleted product #${productId}`);
                     res.json({ changes: this.changes });
                 });
             });
@@ -917,6 +925,7 @@ app.put('/api/products/:id/deduct', authenticateToken, (req, res) => {
                     [productId, username, 'deduct'],
                     (err) => {
                         if (err) console.error("Error logging transaction:", err);
+                        logAdminAction(req, 'deduct_stock', 'product', productId, `Deducted one item from product #${productId}`);
                         // We still return success even if logging fails
                         res.json({ success: true, changes: this.changes });
                     }
@@ -924,6 +933,154 @@ app.put('/api/products/:id/deduct', authenticateToken, (req, res) => {
             }
         );
     });
+});
+
+// ---------------- CUSTOMER DIRECTORY + AUDIT ROUTES ---------------- //
+const ADMIN_CUSTOMER_SELECT = `
+    SELECT c.id, c.name, COALESCE(ca.email, c.email, '') AS email,
+           COALESCE(c.phone, ca.phone, '') AS phone,
+           COALESCE(NULLIF(c.address, ''), (
+               SELECT address_line1 FROM customer_addresses a
+                WHERE a.customer_id = c.customer_account_id
+                ORDER BY a.is_default DESC, a.id DESC LIMIT 1
+           ), '') AS address,
+           COALESCE(NULLIF(c.city, ''), (
+               SELECT city FROM customer_addresses a
+                WHERE a.customer_id = c.customer_account_id
+                ORDER BY a.is_default DESC, a.id DESC LIMIT 1
+           ), '') AS city,
+           COALESCE(c.country, 'Ghana') AS country,
+           COALESCE(c.customer_group, 'Retail') AS customer_group,
+           COALESCE(c.notes, '') AS notes,
+           COALESCE(c.status, 'active') AS status,
+           c.customer_account_id,
+           CASE WHEN ca.firebase_uid IS NOT NULL THEN 1 ELSE 0 END AS registered_account,
+           c.created_at, c.updated_at,
+           COUNT(DISTINCT o.id) AS order_count,
+           COALESCE(SUM(CASE WHEN lower(COALESCE(o.status, '')) IN
+               ('paid','processing','shipped','dispatched','delivered','completed')
+               THEN o.total_amount ELSE 0 END), 0) AS total_spent,
+           MAX(o.created_at) AS last_order_at
+      FROM customers c
+      LEFT JOIN customer_accounts ca ON ca.id = c.customer_account_id
+      LEFT JOIN orders o ON (
+          (c.customer_account_id IS NOT NULL AND o.customer_account_id = c.customer_account_id) OR
+          (c.customer_account_id IS NULL AND trim(COALESCE(c.phone, '')) <> '' AND o.customer_phone = c.phone)
+      )`;
+
+function normalizeAdminCustomerInput(body, options) {
+    const source = body || {};
+    const name = String(source.name || '').trim();
+    const phone = String(source.phone || '').trim();
+    const email = String(source.email || '').trim().toLowerCase();
+    const address = String(source.address || '').trim();
+    const city = String(source.city || '').trim();
+    const country = String(source.country || 'Ghana').trim() || 'Ghana';
+    const customerGroup = ['Retail', 'Wholesale', 'VIP'].includes(source.customer_group) ? source.customer_group : 'Retail';
+    const notes = String(source.notes || '').trim();
+    const status = source.status === 'inactive' ? 'inactive' : 'active';
+    if (name.length < 2 || name.length > 100) throw paymentError('Customer name must be between 2 and 100 characters');
+    if ((!options || options.requirePhone) && !phone) throw paymentError('Customer phone number is required');
+    if (phone.length > 30) throw paymentError('Customer phone number is too long');
+    if (email && (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 254)) throw paymentError('Enter a valid customer email address');
+    if (address.length > 300 || city.length > 100 || country.length > 100) throw paymentError('Customer address is too long');
+    if (notes.length > 1000) throw paymentError('Customer notes are too long');
+    return { name, phone, email, address, city, country, customerGroup, notes, status };
+}
+
+async function getAdminCustomerById(customerId) {
+    return dbGetAsync(`${ADMIN_CUSTOMER_SELECT} WHERE c.id = ? GROUP BY c.id`, [customerId]);
+}
+
+app.get('/api/admin/customers', authenticateToken, async (req, res) => {
+    try {
+        const rows = await dbAllAsync(`${ADMIN_CUSTOMER_SELECT} GROUP BY c.id ORDER BY c.created_at DESC, c.id DESC`);
+        res.json(rows);
+    } catch (error) { serverError(res, error); }
+});
+
+app.post('/api/admin/customers', authenticateToken, requireManager, async (req, res) => {
+    try {
+        const customer = normalizeAdminCustomerInput(req.body, { requirePhone: true });
+        const inserted = await dbRunAsync(
+            `INSERT INTO customers
+                (name, phone, email, address, city, country, customer_group, notes, status, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
+            [customer.name, customer.phone, customer.email || null, customer.address, customer.city,
+                customer.country, customer.customerGroup, customer.notes, customer.status]
+        );
+        const row = await getAdminCustomerById(inserted.lastID);
+        logAdminAction(req, 'create', 'customer', inserted.lastID, `Added customer: ${customer.name}`);
+        res.status(201).json(row);
+    } catch (error) {
+        if (String(error && error.message).includes('UNIQUE constraint failed: customers.phone')) {
+            return res.status(409).json({ error: 'A customer with this phone number already exists' });
+        }
+        if (error && error.status) return res.status(error.status).json({ error: error.message });
+        serverError(res, error);
+    }
+});
+
+app.put('/api/admin/customers/:id', authenticateToken, requireManager, async (req, res) => {
+    const customerId = Number(req.params.id);
+    if (!Number.isInteger(customerId) || customerId < 1) return res.status(400).json({ error: 'Invalid customer id' });
+    let transactionOpen = false;
+    try {
+        const existing = await dbGetAsync('SELECT * FROM customers WHERE id = ?', [customerId]);
+        if (!existing) return res.status(404).json({ error: 'Customer not found' });
+        const customer = normalizeAdminCustomerInput(req.body, { requirePhone: !existing.customer_account_id });
+        await dbRunAsync('BEGIN IMMEDIATE');
+        transactionOpen = true;
+        await dbRunAsync(
+            `UPDATE customers SET name = ?, phone = ?, address = ?, city = ?, country = ?, customer_group = ?,
+                notes = ?, status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+            [customer.name, customer.phone || null, customer.address, customer.city, customer.country,
+                customer.customerGroup, customer.notes, customer.status, customerId]
+        );
+        if (existing.customer_account_id) {
+            await dbRunAsync('UPDATE customer_accounts SET name = ?, phone = ? WHERE id = ?',
+                [customer.name, customer.phone || null, existing.customer_account_id]);
+        }
+        await dbRunAsync('COMMIT');
+        transactionOpen = false;
+        const row = await getAdminCustomerById(customerId);
+        logAdminAction(req, 'update', 'customer', customerId, `Updated customer: ${customer.name}`);
+        res.json(row);
+    } catch (error) {
+        if (transactionOpen) {
+            try { await dbRunAsync('ROLLBACK'); } catch (rollbackError) { console.error('[customer rollback]', rollbackError.message); }
+        }
+        if (String(error && error.message).includes('UNIQUE constraint failed: customers.phone')) {
+            return res.status(409).json({ error: 'A customer with this phone number already exists' });
+        }
+        if (error && error.status) return res.status(error.status).json({ error: error.message });
+        serverError(res, error);
+    }
+});
+
+app.patch('/api/admin/customers/:id/notes', authenticateToken, async (req, res) => {
+    const customerId = Number(req.params.id);
+    const notes = String(req.body && req.body.notes || '').trim();
+    if (!Number.isInteger(customerId) || customerId < 1) return res.status(400).json({ error: 'Invalid customer id' });
+    if (notes.length > 1000) return res.status(400).json({ error: 'Customer notes are too long' });
+    try {
+        const updated = await dbRunAsync('UPDATE customers SET notes = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', [notes, customerId]);
+        if (!updated.changes) return res.status(404).json({ error: 'Customer not found' });
+        logAdminAction(req, 'update_notes', 'customer', customerId, `Updated notes for customer #${customerId}`);
+        res.json({ success: true });
+    } catch (error) { serverError(res, error); }
+});
+
+app.get('/api/admin/audit-log', authenticateToken, async (req, res) => {
+    const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 100);
+    try {
+        const rows = await dbAllAsync(
+            `SELECT id, actor_username, action, entity_type, entity_id, summary, created_at
+               FROM admin_audit_log ORDER BY id DESC LIMIT ?`,
+            [limit]
+        );
+        res.json(rows);
+    } catch (error) { serverError(res, error); }
 });
 
 // ---------------- SUPPLIER ROUTES ---------------- //
@@ -976,6 +1133,7 @@ app.post('/api/suppliers', authenticateToken, requireManager, (req, res) => {
 
             db.get(`SELECT * FROM suppliers WHERE id = ?`, [this.lastID], (err, supplier) => {
                 if (err) return serverError(res, err);
+                logAdminAction(req, 'create', 'supplier', supplier.id, `Added supplier: ${supplier.supplier_name}`);
                 res.status(201).json(supplier);
             });
         }
@@ -1027,6 +1185,7 @@ app.put('/api/suppliers/:id', authenticateToken, requireManager, (req, res) => {
 
             db.get(`SELECT * FROM suppliers WHERE id = ?`, [req.params.id], (err, supplier) => {
                 if (err) return serverError(res, err);
+                logAdminAction(req, 'update', 'supplier', supplier.id, `Updated supplier: ${supplier.supplier_name}`);
                 res.json(supplier);
             });
         }
@@ -1071,6 +1230,7 @@ app.post('/api/users', authenticateToken, requireManager, (req, res) => {
             sendEmail(mail, 'You now have DC Kids admin access',
                 `<p>Hi ${escapeHtmlServer(name)}, you've been given ${finalRole} access to the DC Kids dashboard.</p>
                  <p>Sign in at <a href="${APP_URL}/admin.html">${APP_URL}/admin.html</a> — we'll email you a 6-digit code each time.</p>`);
+            logAdminAction(req, 'create', 'staff', this.lastID, `Added ${finalRole}: ${mail}`);
             res.status(201).json({ id: this.lastID, email: mail, full_name: name, role: finalRole });
         }
     );
@@ -1094,6 +1254,7 @@ app.delete('/api/users/:id', authenticateToken, requireManager, (req, res) => {
             db.run(`DELETE FROM users WHERE id = ?`, [userId], function (err3) {
                 if (err3) return serverError(res, err3);
                 if (this.changes === 0) return res.status(404).json({ error: 'User not found' });
+                logAdminAction(req, 'delete', 'staff', userId, `Deleted staff account #${userId}`);
                 res.json({ success: true, message: 'User deleted successfully' });
             });
         });
@@ -1246,8 +1407,18 @@ app.post('/api/orders', optionalCustomer, (req, res) => {
                         insertItemStmt.finalize();
 
                         db.run(
-                            `INSERT OR IGNORE INTO customers (name, phone) VALUES (?, ?)`,
-                            [customer_name || 'Guest Customer', customer_phone || null]
+                            `INSERT INTO customers
+                                (name, phone, email, address, city, country, status, customer_account_id, updated_at)
+                             VALUES (?, ?, ?, ?, ?, 'Ghana', 'active', ?, CURRENT_TIMESTAMP)
+                             ON CONFLICT(phone) DO UPDATE SET
+                                name = excluded.name,
+                                email = COALESCE(excluded.email, customers.email),
+                                address = CASE WHEN trim(COALESCE(excluded.address, '')) <> '' THEN excluded.address ELSE customers.address END,
+                                city = CASE WHEN trim(COALESCE(excluded.city, '')) <> '' THEN excluded.city ELSE customers.city END,
+                                customer_account_id = COALESCE(excluded.customer_account_id, customers.customer_account_id),
+                                status = 'active', updated_at = CURRENT_TIMESTAMP`,
+                            [customer_name || 'Guest Customer', customer_phone || null, authoritativeEmail || null,
+                                address.line1 || null, address.city || delivery_area || null, req.customer ? req.customer.cid : null]
                         );
 
                         db.run(
@@ -1387,8 +1558,18 @@ async function createPaystackOrder(checkout, priced, customer) {
                 [orderId, item.product_id, item.product_name, item.quantity, item.price_at_time]
             );
         }
-        await dbRunAsync('INSERT OR IGNORE INTO customers (name, phone, email) VALUES (?, ?, ?)',
-            [checkout.customerName, checkout.customerPhone, checkout.customerEmail]);
+        await dbRunAsync(
+            `INSERT INTO customers
+                (name, phone, email, address, city, country, status, customer_account_id, updated_at)
+             VALUES (?, ?, ?, ?, ?, 'Ghana', 'active', ?, CURRENT_TIMESTAMP)
+             ON CONFLICT(phone) DO UPDATE SET
+                name = excluded.name, email = COALESCE(excluded.email, customers.email),
+                address = excluded.address, city = excluded.city,
+                customer_account_id = COALESCE(excluded.customer_account_id, customers.customer_account_id),
+                status = 'active', updated_at = CURRENT_TIMESTAMP`,
+            [checkout.customerName, checkout.customerPhone, checkout.customerEmail, checkout.address.line1,
+                checkout.address.city, customer ? customer.cid : null]
+        );
         const payment = await dbRunAsync(
             `INSERT INTO payments (order_id, payment_method, amount, status, provider, provider_reference, currency)
              VALUES (?, 'Paystack', ?, 'pending', 'paystack', ?, 'GHS')`,
@@ -1792,9 +1973,11 @@ app.put('/api/orders/:id', authenticateToken, async (req, res) => {
         if (!order) return res.status(404).json({ error: 'Order not found' });
         if (normStatus === 'paid') {
             const result = await markOrderPaid(orderId, null, null);
+            logAdminAction(req, 'update_status', 'order', orderId, `Marked order #${orderId} as paid`, { from: order.status, to: 'paid' });
             return res.json({ success: true, changes: result.becamePaid ? 1 : 0 });
         }
         const updated = await dbRunAsync('UPDATE orders SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', [normStatus, orderId]);
+        if (updated.changes) logAdminAction(req, 'update_status', 'order', orderId, `Changed order #${orderId} to ${normStatus.replace(/_/g, ' ')}`, { from: order.status, to: normStatus });
         res.json({ success: true, changes: updated.changes });
     } catch (error) { serverError(res, error); }
 });
@@ -1810,6 +1993,7 @@ app.delete('/api/orders/:id', authenticateToken, (req, res) => {
             db.run(`DELETE FROM payments WHERE order_id = ?`, [orderId], () => {
                 db.run(`DELETE FROM orders WHERE id = ?`, [orderId], function(err) {
                     if (err) return serverError(res, err);
+                    logAdminAction(req, 'delete', 'order', orderId, `Deleted order #${orderId}`);
                     res.json({ success: true, deleted: orderId });
                 });
             });
@@ -2248,6 +2432,61 @@ const requireCustomerAccountsEnabled = (req, res) => {
     res.status(410).json({ error: 'This sign-in method has been retired. Use the customer account page.' });
 };
 
+function logAdminAction(req, action, entityType, entityId, summary, details) {
+    const actor = req && req.user ? req.user : {};
+    let detailsJson = null;
+    if (details && typeof details === 'object') {
+        try { detailsJson = JSON.stringify(details); } catch (error) { detailsJson = null; }
+    }
+    db.run(
+        `INSERT INTO admin_audit_log
+            (actor_user_id, actor_username, action, entity_type, entity_id, summary, details_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [actor.id || null, actor.username || 'system', action, entityType, entityId == null ? null : String(entityId), summary, detailsJson],
+        (error) => {
+            if (error) console.error('[audit log]', error.message);
+        }
+    );
+}
+
+async function syncCustomerDirectoryAccount(account) {
+    if (!account || !account.id) return null;
+    const name = String(account.name || account.email || 'Customer').trim();
+    const phone = String(account.phone || '').trim();
+    const email = String(account.email || '').trim().toLowerCase();
+    let directoryCustomer = await dbGetAsync(
+        'SELECT id FROM customers WHERE customer_account_id = ?',
+        [account.id]
+    );
+
+    if (!directoryCustomer && phone) {
+        directoryCustomer = await dbGetAsync('SELECT id, customer_account_id FROM customers WHERE phone = ?', [phone]);
+        if (directoryCustomer && directoryCustomer.customer_account_id && directoryCustomer.customer_account_id !== account.id) {
+            const conflict = new Error('That phone number belongs to another customer account');
+            conflict.status = 409;
+            throw conflict;
+        }
+    }
+
+    if (directoryCustomer) {
+        await dbRunAsync(
+            `UPDATE customers
+                SET name = ?, phone = ?, email = ?, customer_account_id = ?, status = 'active',
+                    updated_at = CURRENT_TIMESTAMP
+              WHERE id = ?`,
+            [name, phone || null, email || null, account.id, directoryCustomer.id]
+        );
+        return directoryCustomer.id;
+    }
+
+    const inserted = await dbRunAsync(
+        `INSERT INTO customers (name, phone, email, status, customer_account_id, updated_at)
+         VALUES (?, ?, ?, 'active', ?, CURRENT_TIMESTAMP)`,
+        [name, phone || null, email || null, account.id]
+    );
+    return inserted.lastID;
+}
+
 app.get('/api/customer/auth/config', (req, res) => {
     res.json({
         apiKey: FIREBASE_PUBLIC_CONFIG.apiKey || null,
@@ -2328,6 +2567,7 @@ app.post('/api/customer/session', loginLimiter, async (req, res) => {
         }
 
         const customer = await dbGetAsync(`SELECT id, email, phone, name, created_at, last_login_at FROM customer_accounts WHERE id = ?`, [account.id]);
+        await syncCustomerDirectoryAccount(customer);
         await dbRunAsync('COMMIT');
         transactionOpen = false;
         res.json({ success: true, created, linkedLegacy, customer });
@@ -2416,11 +2656,24 @@ app.put('/api/customer/me', authenticateCustomer, async (req, res) => {
     const phone = String((req.body && req.body.phone) || '').trim();
     if (name.length < 2 || name.length > 100) return res.status(400).json({ error: 'Name must be between 2 and 100 characters' });
     if (phone.length > 30) return res.status(400).json({ error: 'Phone number is too long' });
+    let transactionOpen = false;
     try {
+        await dbRunAsync('BEGIN IMMEDIATE');
+        transactionOpen = true;
         await dbRunAsync(`UPDATE customer_accounts SET name = ?, phone = ? WHERE id = ?`, [name, phone || null, req.customer.cid]);
         const customer = await dbGetAsync(`SELECT id, email, phone, name, created_at, last_login_at FROM customer_accounts WHERE id = ?`, [req.customer.cid]);
+        await syncCustomerDirectoryAccount(customer);
+        await dbRunAsync('COMMIT');
+        transactionOpen = false;
         res.json({ success: true, customer });
-    } catch (err) { serverError(res, err); }
+    } catch (err) {
+        if (transactionOpen) {
+            try { await dbRunAsync('ROLLBACK'); } catch (rollbackErr) { console.error('[customer profile rollback]', rollbackErr.message); }
+        }
+        if (err && err.status) return res.status(err.status).json({ error: err.message });
+        if (String(err && err.message || '').includes('UNIQUE')) return res.status(409).json({ error: 'That phone number belongs to another customer' });
+        serverError(res, err);
+    }
 });
 
 // Customer's own order history uses explicit account ownership only.
@@ -2727,6 +2980,7 @@ app.put('/api/users/:id', authenticateToken, requireManager, (req, res) => {
             return serverError(res, err);
         }
         if (this.changes === 0) return res.status(404).json({ error: 'User not found' });
+        logAdminAction(req, 'update', 'staff', req.params.id, `Updated staff account #${req.params.id}`);
         res.json({ success: true });
     });
 });

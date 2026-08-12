@@ -197,6 +197,13 @@ async function run() {
         adminSource.includes("fetch(API_URL + '/analytics/sales' + dashboardAnalyticsQuery(period)") &&
         !adminSource.includes("totalEl.textContent = '1,245'") &&
         !adminSource.includes('var inStock = 870'));
+    check('admin customers, suppliers, and activity use server-backed interfaces',
+        adminPageSource.includes('id="modal-audit-log"') &&
+        adminSource.includes("fetch(API_URL + '/admin/customers'") &&
+        adminSource.includes("fetch(API_URL + '/suppliers'") &&
+        adminSource.includes("fetch(API_URL + '/admin/audit-log?limit=100'") &&
+        !adminSource.includes("localStorage.setItem('dcKidsCustomers'") &&
+        !adminSource.includes("localStorage.setItem('dcKidsSuppliers'"));
     check('obsolete browser-only admin password controls are retired',
         !adminPageSource.includes('modal-settings-password') &&
         !adminSource.includes('dcKidsAdminPwHash') &&
@@ -237,6 +244,8 @@ async function run() {
     // ---- auth: passwordless flow ----
     r = await fetch(`${BASE}/api/orders`);
     check('orders list requires auth', r.status === 401, `status ${r.status}`);
+    r = await fetch(`${BASE}/api/admin/customers`);
+    check('admin customer directory requires auth', r.status === 401, `status ${r.status}`);
 
     // First sign-up bootstraps the owner and returns one-time recovery codes.
     r = await fetch(`${BASE}/api/admin/register`, json('POST', {
@@ -261,6 +270,44 @@ async function run() {
 
     r = await fetch(`${BASE}/api/orders`, { headers: auth });
     check('orders list works with token', r.status === 200, `status ${r.status}`);
+
+    r = await fetch(`${BASE}/api/suppliers`, { headers: auth });
+    const initialSuppliers = await r.json();
+    check('supplier directory starts without preview records', r.status === 200 && initialSuppliers.length === 0, `found ${initialSuppliers.length}`);
+
+    r = await fetch(`${BASE}/api/admin/customers`, json('POST', {
+        name: 'Walk-in Customer', phone: '0201002003', email: 'walkin@test.com',
+        address: '12 Market Road', city: 'Kumasi', country: 'Ghana', customer_group: 'Retail'
+    }, auth));
+    const manualCustomer = await r.json();
+    check('manager can add a shared customer record', r.status === 201 && manualCustomer.id > 0, `status ${r.status}`);
+    r = await fetch(`${BASE}/api/admin/customers/${manualCustomer.id}`, json('PUT', {
+        name: 'Walk-in Customer', phone: '0201002003', address: '14 Market Road',
+        city: 'Kumasi', country: 'Ghana', customer_group: 'VIP', notes: '', status: 'active'
+    }, auth));
+    const updatedManualCustomer = await r.json();
+    check('manager can update a shared customer record', r.status === 200 && updatedManualCustomer.customer_group === 'VIP' && updatedManualCustomer.address === '14 Market Road');
+    r = await fetch(`${BASE}/api/admin/customers/${manualCustomer.id}/notes`, json('PATCH', { notes: 'Prefers WhatsApp updates.' }, auth));
+    check('customer notes persist through the admin API', r.status === 200, `status ${r.status}`);
+    r = await fetch(`${BASE}/api/admin/customers`, { headers: auth });
+    const sharedCustomers = await r.json();
+    check('customer directory returns persisted records', r.status === 200 && sharedCustomers.some(customer => customer.id === manualCustomer.id && customer.notes === 'Prefers WhatsApp updates.'));
+
+    r = await fetch(`${BASE}/api/suppliers`, json('POST', {
+        supplier_name: 'Accra Kids Textiles', contact_person: 'Ama Mensah', email: 'ama@supplier.test',
+        phone: '0203004005', business_address: 'North Industrial Area, Accra',
+        products_supplied: 'Children clothing', status: 'active', notes: 'Smoke-test supplier'
+    }, auth));
+    const sharedSupplier = await r.json();
+    check('manager can add a shared supplier record', r.status === 201 && sharedSupplier.id > 0, `status ${r.status}`);
+    r = await fetch(`${BASE}/api/suppliers`, { headers: auth });
+    const persistedSuppliers = await r.json();
+    check('supplier directory returns persisted records', r.status === 200 && persistedSuppliers.some(supplier => supplier.id === sharedSupplier.id));
+    r = await fetch(`${BASE}/api/admin/audit-log?limit=20`, { headers: auth });
+    const earlyAudit = await r.json();
+    check('admin mutations create a shared audit trail', r.status === 200 &&
+        earlyAudit.some(entry => entry.entity_type === 'customer') &&
+        earlyAudit.some(entry => entry.entity_type === 'supplier'));
 
     // ---- deterministic SKU backfill preserves manual assignments ----
     await dbRun(`UPDATE products SET sku = 'MANUAL-KEEP' WHERE id = 1`);
@@ -459,6 +506,11 @@ async function run() {
     const updatedProfile = await r.json();
     check('profile updates name and phone', r.status === 200 && updatedProfile.customer.name === 'Updated Customer' && updatedProfile.customer.phone === '0244444444');
     check('profile email is immutable', updatedProfile.customer.email === 'new.customer@test.com');
+    r = await fetch(`${BASE}/api/admin/customers`, { headers: auth });
+    const accountDirectory = await r.json();
+    check('Firebase account profile is synchronized into the admin directory', r.status === 200 && accountDirectory.some(customer =>
+        customer.customer_account_id === customerId && customer.registered_account === 1 &&
+        customer.name === 'Updated Customer' && customer.phone === '0244444444' && customer.email === 'new.customer@test.com'));
     r = await fetch(`${BASE}/api/customer/me`, json('PUT', { name: 'X', phone: '024' }, customerAuth));
     check('profile validation rejects short names', r.status === 400, `status ${r.status}`);
 

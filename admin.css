@@ -10041,6 +10041,105 @@ body.dark-mode .mobile-bottom-nav,
 
 .activity-footer button:hover { text-decoration: underline; }
 
+.customer-account-mark {
+    display: inline-flex;
+    align-items: center;
+    margin-left: 8px;
+    padding: 3px 7px;
+    border-radius: 999px;
+    background: #eef7f1;
+    color: #267a4a;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: .02em;
+    vertical-align: middle;
+}
+
+.audit-log-modal {
+    width: min(760px, calc(100vw - 32px));
+    max-height: min(760px, calc(100dvh - 40px));
+}
+
+.audit-log-subtitle {
+    margin: 5px 0 0;
+    color: var(--text-secondary);
+    font-size: 13px;
+}
+
+.audit-log-body {
+    min-height: 280px;
+    overflow-y: auto;
+}
+
+.audit-log-list {
+    display: flex;
+    flex-direction: column;
+}
+
+.audit-log-row {
+    display: grid;
+    grid-template-columns: 38px minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 12px;
+    padding: 14px 0;
+    border-bottom: 1px solid var(--border);
+}
+
+.audit-log-row:last-child { border-bottom: 0; }
+
+.audit-log-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
+    border-radius: 11px;
+    background: #f7f2f4;
+    color: var(--primary);
+}
+
+.audit-log-copy {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    gap: 4px;
+}
+
+.audit-log-copy strong {
+    overflow: hidden;
+    color: var(--text-primary);
+    font-size: 13px;
+    font-weight: 650;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.audit-log-copy span,
+.audit-log-row time {
+    color: var(--text-secondary);
+    font-size: 11px;
+}
+
+.audit-log-row time { white-space: nowrap; }
+
+.audit-log-empty {
+    padding: 80px 20px;
+    color: var(--text-secondary);
+    text-align: center;
+}
+
+@media (max-width: 640px) {
+    .audit-log-modal {
+        width: 100%;
+        max-height: 92dvh;
+        margin-top: auto;
+        border-radius: 22px 22px 0 0;
+    }
+
+    .audit-log-row { grid-template-columns: 36px minmax(0, 1fr); }
+    .audit-log-row time { grid-column: 2; }
+}
+
 @keyframes dashboard-spin { to { transform: rotate(360deg); } }
 
 @media (max-width: 640px) {

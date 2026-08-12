@@ -192,6 +192,143 @@ function migrateCommerceSchema(done) {
     }));
 }
 
+// Shared admin operations migration. Customer records, suppliers, and the
+// activity log must live in the database so every signed-in admin sees the
+// same truth regardless of browser or device.
+function migrateAdminOperationsSchema(done) {
+    const customerColumns = [
+        ['address', 'address TEXT'],
+        ['city', 'city TEXT'],
+        ['country', "country TEXT DEFAULT 'Ghana'"],
+        ['customer_group', "customer_group TEXT DEFAULT 'Retail'"],
+        ['notes', 'notes TEXT'],
+        ['status', "status TEXT DEFAULT 'active'"],
+        ['customer_account_id', 'customer_account_id INTEGER'],
+        ['updated_at', 'updated_at DATETIME DEFAULT CURRENT_TIMESTAMP']
+    ];
+
+    db.all('PRAGMA table_info(customers)', [], (columnsErr, columns) => {
+        if (columnsErr) {
+            console.error('Admin operations migration (customers read) failed:', columnsErr.message);
+            return done();
+        }
+        const existing = new Set((columns || []).map((column) => column.name));
+        const pending = customerColumns.filter(([name]) => !existing.has(name));
+        const addNext = () => {
+            const next = pending.shift();
+            if (!next) return createAdminTables();
+            db.run(`ALTER TABLE customers ADD COLUMN ${next[1]}`, (alterErr) => {
+                if (alterErr) console.error(`Admin operations migration (customers.${next[0]}) failed:`, alterErr.message);
+                else console.log(`Migration: added customers.${next[0]}`);
+                addNext();
+            });
+        };
+        addNext();
+    });
+
+    function createAdminTables() {
+        db.exec(`
+            CREATE TABLE IF NOT EXISTS admin_audit_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                actor_user_id INTEGER,
+                actor_username TEXT NOT NULL,
+                action TEXT NOT NULL,
+                entity_type TEXT NOT NULL,
+                entity_id TEXT,
+                summary TEXT NOT NULL,
+                details_json TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS idx_admin_audit_created ON admin_audit_log (created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_admin_audit_entity ON admin_audit_log (entity_type, entity_id);
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_customers_account ON customers (customer_account_id) WHERE customer_account_id IS NOT NULL;
+        `, (schemaErr) => {
+            if (schemaErr) console.error('Admin operations migration (audit schema) failed:', schemaErr.message);
+            retireLegacySuppliers();
+        });
+    }
+
+    function retireLegacySuppliers() {
+        // Remove only the exact preview suppliers previously bundled with the
+        // prototype. Any row the owner edited is intentionally preserved.
+        db.run(`DELETE FROM suppliers WHERE
+            (supplier_name = 'Little Stars Textiles' AND contact_person = 'Grace Adjei' AND phone = '+233302221111') OR
+            (supplier_name = 'TinyFeet Footwear' AND contact_person = 'Michael Osei' AND phone = '+233302222222') OR
+            (supplier_name = 'BabyComfort Ltd' AND contact_person = 'Sarah Mensah' AND phone = '+233302223333') OR
+            (supplier_name = 'KidsBag World' AND contact_person = 'Daniel Tetteh' AND phone = '+233302224444')`, function (deleteErr) {
+            if (deleteErr) console.error('Admin operations migration (legacy suppliers) failed:', deleteErr.message);
+            else if (this.changes) console.log(`Migration: retired ${this.changes} preview supplier record(s)`);
+            backfillAccountCustomers();
+        });
+    }
+
+    function backfillAccountCustomers() {
+        db.all('SELECT id, email, phone, name, created_at FROM customer_accounts ORDER BY id', [], (accountsErr, accounts) => {
+            if (accountsErr) {
+                console.error('Admin operations migration (account customers) failed:', accountsErr.message);
+                return backfillOrderCustomers();
+            }
+            const rows = accounts || [];
+            let index = 0;
+            const insertNext = () => {
+                const account = rows[index++];
+                if (!account) return backfillOrderCustomers();
+                const name = String(account.name || '').trim() || String(account.email || '').split('@')[0] || 'Customer';
+                const phone = String(account.phone || '').trim();
+                const sql = phone
+                    ? `INSERT INTO customers (name, phone, email, status, customer_account_id, created_at, updated_at)
+                       VALUES (?, ?, ?, 'active', ?, COALESCE(?, CURRENT_TIMESTAMP), CURRENT_TIMESTAMP)
+                       ON CONFLICT(phone) DO UPDATE SET
+                         name = excluded.name, email = excluded.email, customer_account_id = excluded.customer_account_id,
+                         status = 'active', updated_at = CURRENT_TIMESTAMP`
+                    : `INSERT INTO customers (name, phone, email, status, customer_account_id, created_at, updated_at)
+                       SELECT ?, NULL, ?, 'active', ?, COALESCE(?, CURRENT_TIMESTAMP), CURRENT_TIMESTAMP
+                       WHERE NOT EXISTS (SELECT 1 FROM customers WHERE customer_account_id = ?)`;
+                const params = phone
+                    ? [name, phone, account.email || null, account.id, account.created_at || null]
+                    : [name, account.email || null, account.id, account.created_at || null, account.id];
+                db.run(sql, params, (insertErr) => {
+                    if (insertErr) console.error('Admin operations migration (account customer row) failed:', insertErr.message);
+                    insertNext();
+                });
+            };
+            insertNext();
+        });
+    }
+
+    function backfillOrderCustomers() {
+        db.all(`SELECT customer_name, customer_phone, customer_email, customer_account_id,
+                       MIN(created_at) AS first_order_at
+                  FROM orders
+                 WHERE trim(COALESCE(customer_phone, '')) <> ''
+                 GROUP BY customer_phone
+                 ORDER BY MIN(id)`, [], (ordersErr, orders) => {
+            if (ordersErr) {
+                console.error('Admin operations migration (order customers) failed:', ordersErr.message);
+                return done();
+            }
+            const rows = orders || [];
+            let index = 0;
+            const insertNext = () => {
+                const order = rows[index++];
+                if (!order) return done();
+                db.run(
+                    `INSERT OR IGNORE INTO customers
+                        (name, phone, email, status, customer_account_id, created_at, updated_at)
+                     VALUES (?, ?, ?, 'active', ?, COALESCE(?, CURRENT_TIMESTAMP), CURRENT_TIMESTAMP)`,
+                    [order.customer_name || 'Customer', order.customer_phone, order.customer_email || null,
+                        order.customer_account_id || null, order.first_order_at || null],
+                    (insertErr) => {
+                        if (insertErr) console.error('Admin operations migration (order customer row) failed:', insertErr.message);
+                        insertNext();
+                    }
+                );
+            };
+            insertNext();
+        });
+    }
+}
+
 const db = new sqlite3.Database(dbPath, (err) => {
     if (err) {
         console.error('Error opening database', err.message);
@@ -570,77 +707,8 @@ const db = new sqlite3.Database(dbPath, (err) => {
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )`, (err) => {
             if (err) console.error("Error creating suppliers table", err);
-
-            const suppliersData = [
-                {
-                    supplier_name: 'Little Stars Textiles',
-                    contact_person: 'Grace Adjei',
-                    email: 'grace@littlestars.com',
-                    phone: '+233302221111',
-                    business_address: 'Accra Central, Ghana',
-                    products_supplied: 'Clothing, Baby Essentials',
-                    status: 'active',
-                    notes: 'Core clothing and romper supplier.',
-                    supplier_logo: ''
-                },
-                {
-                    supplier_name: 'TinyFeet Footwear',
-                    contact_person: 'Michael Osei',
-                    email: 'michael@tinyfeet.com',
-                    phone: '+233302222222',
-                    business_address: 'Spintex Road, Accra',
-                    products_supplied: 'Shoes, Accessories',
-                    status: 'active',
-                    notes: 'Kids shoes and sandal supplier.',
-                    supplier_logo: ''
-                },
-                {
-                    supplier_name: 'BabyComfort Ltd',
-                    contact_person: 'Sarah Mensah',
-                    email: 'sarah@babycomfort.com',
-                    phone: '+233302223333',
-                    business_address: 'North Kaneshie, Accra',
-                    products_supplied: 'Baby Essentials, Toys',
-                    status: 'active',
-                    notes: 'Baby care and essentials partner.',
-                    supplier_logo: ''
-                },
-                {
-                    supplier_name: 'KidsBag World',
-                    contact_person: 'Daniel Tetteh',
-                    email: 'daniel@kidsbag.com',
-                    phone: '+233302224444',
-                    business_address: 'Kasoa, Central Region',
-                    products_supplied: 'Accessories, Toys',
-                    status: 'inactive',
-                    notes: 'Seasonal bags and accessories supplier.',
-                    supplier_logo: ''
-                }
-            ];
-
-            db.get(`SELECT COUNT(*) as count FROM suppliers`, (err, row) => {
-                if (err || !row || row.count > 0) return;
-
-                const stmt = db.prepare(`INSERT INTO suppliers
-                    (supplier_name, contact_person, email, phone, business_address, products_supplied, status, notes, supplier_logo)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`);
-
-                suppliersData.forEach((s) => {
-                    stmt.run(
-                        s.supplier_name,
-                        s.contact_person,
-                        s.email,
-                        s.phone,
-                        s.business_address,
-                        s.products_supplied,
-                        s.status,
-                        s.notes,
-                        s.supplier_logo
-                    );
-                });
-                stmt.finalize();
-                console.log("Default suppliers verified.");
-            });
+            // Intentionally starts empty. Suppliers are operational business
+            // records and must be added by an authorized manager.
         });
 
         // Create customers table for analytics relationships
@@ -857,7 +925,9 @@ const db = new sqlite3.Database(dbPath, (err) => {
         // then assigns only blank SKUs before the server begins listening.
         db.run('SELECT 1', () => {
             db.run('SELECT 1', () => migrateCustomerAuthSchema(() => {
-                migrateCommerceSchema(() => backfillMissingProductSkus(() => backfillCategoryArtwork(_markDbReady)));
+                migrateCommerceSchema(() => migrateAdminOperationsSchema(() => {
+                    backfillMissingProductSkus(() => backfillCategoryArtwork(_markDbReady));
+                }));
             }));
         });
     }
