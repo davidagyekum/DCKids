@@ -1913,7 +1913,10 @@ function completedOrder(status) {
 }
 
 function revenueOrder(order) {
-    return !['cancelled', 'awaiting_payment', 'payment_failed', 'payment_review']
+    // Revenue is recognized only after payment has been verified or the order
+    // has advanced into fulfilment. Pending WhatsApp orders and unpaid Paystack
+    // attempts must never inflate sales reporting.
+    return ['paid', 'processing', 'shipped', 'dispatched', 'delivered', 'completed']
         .includes(String(order.status || '').toLowerCase());
 }
 

@@ -49,6 +49,9 @@ let currentRole = '';
 let chartInstances = {};
 let analyticsState = { period: 'week', data: null };
 let analyticsRefreshTimer = null;
+let dashboardRevenuePeriod = 'monthly';
+let dashboardAnalyticsData = null;
+let dashboardLoadSequence = 0;
 
 // Pagination state — smaller pages on mobile keep the DOM light & fast
 const IS_MOBILE_VP = (typeof window !== 'undefined') && window.innerWidth <= 768;
@@ -123,6 +126,7 @@ function fetchOrdersFromServer(callback) {
         // Expected when the API/backend isn't running (preview/offline) — the UI
         // falls back to local data. Warn instead of error so the console stays clean.
         console.warn('Orders API unavailable, using local data:', e && e.message ? e.message : e);
+        if (callback) callback();
     });
 }
 
@@ -1160,16 +1164,43 @@ function toggleDarkMode() {
    ============================================================ */
 function loadDashboard() {
     document.body.classList.add('dash-active');
+    var loadId = ++dashboardLoadSequence;
+    setDashboardLoading(true);
+
     fetchProducts().then(function(products) {
         globalProducts = products;
         fetchOrdersFromServer(function() {
-            updateDashboardWidgets(products);
-            renderRevenueChart();
-            renderInventoryChart(products);
-            renderActivityTimeline();
-            renderDashboardRecentProducts(products);
+            if (loadId !== dashboardLoadSequence) return;
+            loadDashboardAnalytics(dashboardRevenuePeriod)
+                .then(function(analytics) {
+                    if (loadId !== dashboardLoadSequence) return;
+                    dashboardAnalyticsData = analytics;
+                    updateDashboardWidgets(products);
+                    renderRevenueChart(analytics);
+                    renderInventoryChart(products);
+                    renderActivityTimeline();
+                    renderDashboardRecentProducts(products);
+                    setDashboardUpdatedNow();
+                })
+                .catch(function(err) {
+                    if (loadId !== dashboardLoadSequence) return;
+                    dashboardAnalyticsData = null;
+                    updateDashboardWidgets(products);
+                    renderRevenueChart(null);
+                    renderInventoryChart(products);
+                    renderActivityTimeline();
+                    renderDashboardRecentProducts(products);
+                    setDashboardUpdatedNow('Sales analytics unavailable');
+                    console.warn('Dashboard analytics unavailable:', err && err.message ? err.message : err);
+                })
+                .finally(function() {
+                    if (loadId === dashboardLoadSequence) setDashboardLoading(false);
+                });
         });
     }).catch(function(err) {
+        if (loadId !== dashboardLoadSequence) return;
+        setDashboardLoading(false);
+        setDashboardUpdatedNow('Store data unavailable');
         console.error('Dashboard load error:', err);
     });
 }
@@ -1194,26 +1225,109 @@ function fetchProducts() {
         });
 }
 
+function dashboardAnalyticsQuery(period) {
+    var now = new Date();
+    var start = new Date(now);
+    var mode = 'week';
+
+    if (period === 'weekly') start.setDate(start.getDate() - 6);
+    else if (period === 'yearly') {
+        start.setMonth(0, 1);
+        mode = 'year';
+    } else start.setDate(start.getDate() - 29);
+
+    function dateOnly(value) {
+        return value.getFullYear() + '-' + String(value.getMonth() + 1).padStart(2, '0') + '-' + String(value.getDate()).padStart(2, '0');
+    }
+
+    return '?period=' + encodeURIComponent(mode) +
+        '&start=' + encodeURIComponent(dateOnly(start)) +
+        '&end=' + encodeURIComponent(dateOnly(now));
+}
+
+function loadDashboardAnalytics(period) {
+    var token = localStorage.getItem('adminToken');
+    if (!token) return Promise.reject(new Error('Authentication required'));
+
+    return fetch(API_URL + '/analytics/sales' + dashboardAnalyticsQuery(period), {
+        headers: { 'Authorization': 'Bearer ' + token }
+    }).then(function(res) {
+        if (res.status === 401 || res.status === 403) {
+            handleSessionExpiry();
+            throw new Error('Session expired');
+        }
+        if (!res.ok) return res.json().then(function(data) { throw new Error(data.error || 'Failed to load sales analytics'); });
+        return res.json();
+    });
+}
+
+function setDashboardLoading(isLoading) {
+    var dashboard = document.getElementById('tab-dashboard');
+    var refresh = document.getElementById('dashboard-refresh-btn');
+    if (dashboard) dashboard.classList.toggle('dashboard-loading', !!isLoading);
+    if (refresh) {
+        refresh.disabled = !!isLoading;
+        refresh.classList.toggle('is-loading', !!isLoading);
+    }
+}
+
+function setDashboardUpdatedNow(message) {
+    var el = document.getElementById('dashboard-last-updated');
+    if (!el) return;
+    el.textContent = message || ('Updated ' + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
+}
+
+function dashboardPaidStatus(order) {
+    return ['paid', 'processing', 'shipped', 'dispatched', 'delivered', 'completed']
+        .indexOf(String(order && order.status || '').toLowerCase()) >= 0;
+}
+
 function updateDashboardWidgets(products) {
     var totalEl = document.getElementById('val-total-products');
     var lowStockEl = document.getElementById('val-low-stock');
     var salesEl = document.getElementById('val-today-sales');
+    var reviewEl = document.getElementById('val-new-arrivals');
+    var lowContext = document.getElementById('val-low-stock-context');
+    var salesContext = document.getElementById('val-today-sales-context');
+    var reviewContext = document.getElementById('val-review-orders-context');
+    var safeProducts = Array.isArray(products) ? products : [];
+    var orders = getOrders() || [];
+    var today = new Date().toDateString();
+    var todayPaidOrders = orders.filter(function(order) {
+        var created = new Date(order.date || order.created_at || 0);
+        return dashboardPaidStatus(order) && !isNaN(created.getTime()) && created.toDateString() === today;
+    });
+    var todayRevenue = todayPaidOrders.reduce(function(sum, order) { return sum + Number(order.total || 0); }, 0);
+    var lowStock = safeProducts.filter(function(product) { return Number(product.stock || 0) > 0 && Number(product.stock || 0) <= 5; }).length;
+    var outOfStock = safeProducts.filter(function(product) { return Number(product.stock || 0) <= 0; }).length;
+    var awaiting = orders.filter(function(order) { return String(order.status || '').toLowerCase() === 'awaiting_payment'; }).length;
+    var pending = orders.filter(function(order) {
+        return ['pending', 'pending_deposit', 'payment_review'].indexOf(String(order.status || '').toLowerCase()) >= 0;
+    }).length;
 
-    // Always show demo values for visual parity with mockup
-    if (totalEl) totalEl.textContent = '1,245';
-    if (lowStockEl) lowStockEl.textContent = '24';
-    if (salesEl) salesEl.textContent = 'GHS 12,450';
+    if (totalEl) totalEl.textContent = formatNumber(safeProducts.length);
+    if (lowStockEl) lowStockEl.textContent = formatNumber(lowStock + outOfStock);
+    if (salesEl) salesEl.textContent = 'GHS ' + formatNumber(todayRevenue.toFixed(2));
+    if (reviewEl) reviewEl.textContent = formatNumber(pending + awaiting);
+    if (lowContext) lowContext.textContent = lowStock + ' low stock / ' + outOfStock + ' out of stock';
+    if (salesContext) salesContext.textContent = todayPaidOrders.length + ' verified paid order' + (todayPaidOrders.length === 1 ? '' : 's') + ' today';
+    if (reviewContext) reviewContext.textContent = pending + ' pending / ' + awaiting + ' awaiting payment';
+
+    populateAdminUserMenu();
 }
 
-function renderRevenueChart() {
+function renderRevenueChart(analytics) {
     var ctx = document.getElementById('revenueChart');
     if (!ctx) return;
 
     if (chartInstances.revenue) chartInstances.revenue.destroy();
 
-    // Demo monthly data matching reference mockup
-    var labels = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul'];
-    var data = [8500, 12000, 9500, 15000, 12450, 18000, 16500];
+    var trend = analytics && Array.isArray(analytics.trend) ? analytics.trend : [];
+    var labels = trend.map(function(point) { return point.label; });
+    var data = trend.map(function(point) { return Number(point.revenue || 0); });
+    var totalRevenue = analytics && analytics.kpis ? Number(analytics.kpis.totalRevenue || 0) : 0;
+    var growth = analytics && analytics.kpis && analytics.kpis.growth ? Number(analytics.kpis.growth.totalRevenue || 0) : 0;
+    var maxValue = data.length ? Math.max.apply(null, data) : 0;
 
     chartInstances.revenue = new Chart(ctx, {
         type: 'line',
@@ -1255,7 +1369,7 @@ function renderRevenueChart() {
             scales: {
                 y: {
                     beginAtZero: true,
-                    max: 20000,
+                    suggestedMax: maxValue > 0 ? maxValue * 1.15 : 10,
                     ticks: {
                         callback: function(value) {
                             if (value >= 1000) return (value / 1000) + 'K';
@@ -1274,18 +1388,35 @@ function renderRevenueChart() {
         }
     });
 
-    // Add total revenue label below chart
+    // Keep this summary in sync with the exact range displayed by the chart.
     var chartCard = ctx.closest('.chart-card');
     if (chartCard) {
         var existingTotal = chartCard.querySelector('.chart-total');
         if (!existingTotal) {
-            var totalDiv = document.createElement('div');
-            totalDiv.className = 'chart-total';
-            totalDiv.style.cssText = 'padding: 12px 20px; font-size: 13px; color: var(--text-secondary); border-top: 1px solid var(--border);';
-            totalDiv.innerHTML = 'Total Revenue: <strong style="color: var(--text-primary);">GHS 85,600</strong> <span style="color: var(--success); margin-left: 8px;">↑ 15.6%</span> <span style="color: var(--text-secondary);">from last 6 months</span>';
-            chartCard.appendChild(totalDiv);
+            existingTotal = document.createElement('div');
+            existingTotal.className = 'chart-total';
+            existingTotal.style.cssText = 'padding: 12px 20px; font-size: 13px; color: var(--text-secondary); border-top: 1px solid var(--border);';
+            chartCard.appendChild(existingTotal);
         }
+        var trendLabel = growth === 0 ? 'No change' : ((growth > 0 ? '+ ' : '- ') + Math.abs(growth).toFixed(1) + '%');
+        var trendColor = growth > 0 ? 'var(--success)' : (growth < 0 ? 'var(--danger)' : 'var(--text-secondary)');
+        existingTotal.innerHTML = 'Period revenue: <strong style="color:var(--text-primary);">GHS ' + formatNumber(totalRevenue.toFixed(2)) + '</strong>' +
+            ' <span style="color:' + trendColor + ';margin-left:8px;">' + trendLabel + '</span>' +
+            ' <span style="color:var(--text-secondary);">vs previous period</span>';
     }
+}
+
+function exportDashboardRevenue() {
+    var data = dashboardAnalyticsData;
+    if (!data || !Array.isArray(data.trend)) {
+        showToast('Revenue data is still loading', 'warning');
+        return;
+    }
+
+    var rows = data.trend.map(function(point) {
+        return { Period: point.label, Revenue_GHS: Number(point.revenue || 0).toFixed(2), Orders: Number(point.orders || 0) };
+    });
+    exportToCSV(rows, 'dc-kids-' + dashboardRevenuePeriod + '-revenue.csv');
 }
 
 function renderInventoryChart(products) {
@@ -1294,9 +1425,11 @@ function renderInventoryChart(products) {
 
     if (chartInstances.inventory) chartInstances.inventory.destroy();
 
-    var inStock = 870;
-    var lowStock = 250;
-    var outOfStock = 125;
+    var safeProducts = Array.isArray(products) ? products : [];
+    var inStock = safeProducts.filter(function(product) { return Number(product.stock || 0) > 5; }).length;
+    var lowStock = safeProducts.filter(function(product) { return Number(product.stock || 0) > 0 && Number(product.stock || 0) <= 5; }).length;
+    var outOfStock = safeProducts.filter(function(product) { return Number(product.stock || 0) <= 0; }).length;
+    var totalProducts = safeProducts.length;
 
     chartInstances.inventory = new Chart(ctx, {
         type: 'doughnut',
@@ -1355,7 +1488,7 @@ function renderInventoryChart(products) {
                 ctx2.fillText('Total', width, height - 12);
                 ctx2.font = '700 22px Inter, sans-serif';
                 ctx2.fillStyle = '#2d2d3a';
-                ctx2.fillText('1,245', width, height + 10);
+                ctx2.fillText(formatNumber(totalProducts), width, height + 10);
                 ctx2.restore();
             }
         }]
@@ -1366,7 +1499,13 @@ function renderActivityTimeline() {
     var container = document.getElementById('activity-timeline');
     if (!container) return;
 
-    var activities = getActivities();
+    var activities = (getOrders() || []).slice(0, 8).map(function(order) {
+        return {
+            type: 'order',
+            message: (order.id || 'Order') + ' from ' + (order.customer || 'Guest') + ' is ' + String(order.status || 'pending').replace(/_/g, ' '),
+            timestamp: order.date || new Date().toISOString()
+        };
+    });
     var html = '';
     activities.slice(0, 8).forEach(function(a) {
                 html += '<div style="display:flex;align-items:flex-start;gap:12px;padding:12px 0;border-bottom:1px solid ' + '#f5f5f5' + ';">';
@@ -1374,7 +1513,7 @@ function renderActivityTimeline() {
         html += '<div style="flex:1;"><div style="font-size:13px;color:' + '#333' + ';">' + escapeHtml(a.message) + '</div>';
         html += '<div style="font-size:11px;color:#999;margin-top:2px;">' + timeAgo(new Date(a.timestamp)) + '</div></div></div>';
     });
-    container.innerHTML = html || '<div style="color:#888;font-size:14px;padding:16px;">No recent activity</div>';
+    container.innerHTML = html || '<div style="color:#888;font-size:14px;padding:16px;">No store orders yet</div>';
 }
 
 function renderDashboardRecentProducts(products) {
@@ -1426,7 +1565,7 @@ function renderDashboardRecentProducts(products) {
             pagDiv.className = 'dashboard-pagination';
             pagDiv.style.cssText = 'display: flex; justify-content: space-between; align-items: center; padding: 16px 0; border-top: 1px solid var(--border); margin-top: 8px;';
             pagDiv.innerHTML =
-                '<span style="font-size: 13px; color: var(--text-secondary);">Showing 1 to 5 of 1,245 results</span>' +
+                '<span style="font-size: 13px; color: var(--text-secondary);">Showing 1 to ' + Math.min(5, (products || []).length) + ' of ' + formatNumber((products || []).length) + ' results</span>' +
                 '<div style="display: flex; gap: 4px; align-items: center;">' +
                     '<button style="width: 32px; height: 32px; border: 1px solid var(--border); border-radius: 6px; background: var(--card-bg); color: var(--text-secondary); display: flex; align-items: center; justify-content: center; cursor: pointer; font-size: 14px;">&lt;</button>' +
                     '<button style="width: 32px; height: 32px; border: none; border-radius: 6px; background: var(--primary); color: #fff; font-weight: 600; font-size: 13px; cursor: pointer;">1</button>' +
@@ -2386,7 +2525,11 @@ function getFilteredOrders() {
             o.id.toLowerCase().indexOf(query) >= 0 || 
             o.customer.toLowerCase().indexOf(query) >= 0 ||
             phone.toLowerCase().indexOf(query) >= 0;
-        var matchesStatus = status === 'all' || status === '' || o.status === status;
+        var normalizedStatus = String(o.status || '').toLowerCase();
+        var matchesStatus = status === 'all' || status === '' || normalizedStatus === status;
+        if (status === 'attention') {
+            matchesStatus = ['pending', 'pending_deposit', 'awaiting_payment', 'payment_review'].indexOf(normalizedStatus) >= 0;
+        }
         var otype = (o.order_type || o.type || 'retail').toLowerCase();
         var matchesType = !type || otype === type;
         return matchesSearch && matchesStatus && matchesType;
@@ -4437,7 +4580,8 @@ function getOrdersInDateRange(orders, startDate, endDate) {
 
 function isRevenueEligibleOrder(order) {
     if (!order) return false;
-    return ['cancelled', 'awaiting_payment', 'payment_failed', 'payment_review'].indexOf(order.status) === -1;
+    return ['paid', 'processing', 'shipped', 'dispatched', 'delivered', 'completed']
+        .indexOf(String(order.status || '').toLowerCase()) >= 0;
 }
 
 function loadReports(filterType) {
@@ -6073,41 +6217,6 @@ function saveProfile() {
     showToast('Profile saved successfully', 'success');
 }
 
-function updatePassword() {
-    var currentEl = document.getElementById('settings-current-pw');
-    var newPw = document.getElementById('settings-new-pw');
-    var confirmPw = document.getElementById('settings-confirm-pw');
-    if (!newPw || !confirmPw) return;
-
-    // Hash helper (FNV-1a) — never store the raw password, even in prototype/fallback mode.
-    function hashPw(s) {
-        var h = 0x811c9dc5;
-        for (var i = 0; i < s.length; i++) {
-            h ^= s.charCodeAt(i);
-            h = (h + ((h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24))) >>> 0;
-        }
-        return ('00000000' + h.toString(16)).slice(-8);
-    }
-    // Stored value is a hash; default 'admin123' hashes on the fly for first run.
-    var storedHash = localStorage.getItem('dcKidsAdminPwHash') || hashPw('admin123');
-    var current = currentEl ? currentEl.value : '';
-
-    if (!current) { showToast('Enter your current password', 'error'); if (currentEl) currentEl.focus(); return; }
-    if (hashPw(current) !== storedHash) { showToast('Current password is incorrect', 'error'); if (currentEl) currentEl.focus(); return; }
-    if (!newPw.value || newPw.value.length < 6) { showToast('New password must be at least 6 characters', 'warning'); newPw.focus(); return; }
-    if (newPw.value !== confirmPw.value) { showToast('Passwords do not match', 'error'); confirmPw.focus(); return; }
-    if (hashPw(newPw.value) === storedHash) { showToast('New password must differ from the current one', 'warning'); newPw.focus(); return; }
-
-    localStorage.setItem('dcKidsAdminPwHash', hashPw(newPw.value));
-    localStorage.removeItem('dcKidsAdminPassword'); // purge any legacy plaintext
-    if (typeof addActivity === 'function') addActivity('system', 'Admin password updated');
-
-    if (currentEl) currentEl.value = '';
-    newPw.value = '';
-    confirmPw.value = '';
-    showToast('Password updated successfully', 'success');
-}
-
 // Apply persisted accent colour + dark mode + admin profile header on every load.
 document.addEventListener('DOMContentLoaded', function() {
     try {
@@ -6518,7 +6627,7 @@ function buildTabContent(tabId) {
                 '<div class="flex flex-wrap items-center gap-3 w-full md:w-auto">' +
                 '<div class="relative">' +
                 '<select id="order-status-filter" class="appearance-none pl-4 pr-10 py-2.5 border border-gray-200 rounded-xl text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-rose-500 focus:border-rose-500 cursor-pointer shadow-sm transition-colors">' +
-                '<option value="all">All Status</option><option value="pending">Pending</option><option value="awaiting_payment">Awaiting payment</option><option value="payment_review">Payment review</option><option value="paid">Paid</option><option value="processing">Processing</option><option value="delivered">Delivered</option><option value="cancelled">Cancelled</option>' +
+                '<option value="all">All Status</option><option value="attention">Requires attention</option><option value="pending">Pending</option><option value="awaiting_payment">Awaiting payment</option><option value="payment_review">Payment review</option><option value="paid">Paid</option><option value="processing">Processing</option><option value="delivered">Delivered</option><option value="cancelled">Cancelled</option>' +
                 '</select>' +
                 '<div class="pointer-events-none absolute inset-y-0 right-0 flex items-center px-3 text-gray-500">' +
                 '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path></svg>' +
@@ -6608,13 +6717,6 @@ function buildTabContent(tabId) {
                 '<div class="mb-4"><label class="block text-sm font-medium text-gray-700 mb-1">Display Name</label><input type="text" id="settings-name" value="Admin" class="w-full px-4 py-2 border border-gray-200 rounded-xl text-sm focus:ring-2 focus:ring-rose-500 focus:outline-none"></div>' +
                 '<div class="mb-4"><label class="block text-sm font-medium text-gray-700 mb-1">Email</label><input type="email" id="settings-email" value="admin@dckids.com" class="w-full px-4 py-2 border border-gray-200 rounded-xl text-sm focus:ring-2 focus:ring-rose-500 focus:outline-none"></div>' +
                 '<button class="bg-gray-900 hover:bg-gray-800 text-white px-5 py-2.5 rounded-xl text-sm font-medium transition-colors shadow-sm w-full mt-2" id="save-profile-btn" onclick="saveProfile()">Save Profile</button>' +
-                '</div>' +
-
-                // Password section
-                '<div class="bg-white p-6 rounded-2xl border border-gray-100 shadow-sm"><h4 class="font-semibold text-gray-900 mb-4">Change Password</h4>' +
-                '<div class="mb-4"><label class="block text-sm font-medium text-gray-700 mb-1">New Password</label><input type="password" id="settings-new-pw" class="w-full px-4 py-2 border border-gray-200 rounded-xl text-sm focus:ring-2 focus:ring-rose-500 focus:outline-none"></div>' +
-                '<div class="mb-4"><label class="block text-sm font-medium text-gray-700 mb-1">Confirm Password</label><input type="password" id="settings-confirm-pw" class="w-full px-4 py-2 border border-gray-200 rounded-xl text-sm focus:ring-2 focus:ring-rose-500 focus:outline-none"></div>' +
-                '<button class="bg-gray-900 hover:bg-gray-800 text-white px-5 py-2.5 rounded-xl text-sm font-medium transition-colors shadow-sm w-full mt-2" id="update-pw-btn" onclick="updatePassword()">Update Password</button>' +
                 '</div>' +
 
                 // Appearance section
@@ -6967,6 +7069,55 @@ function setupEventListeners() {
     
     var qaGenReport = document.getElementById('qa-gen-report');
     if (qaGenReport) qaGenReport.addEventListener('click', function() { switchTab('tab-reports'); });
+
+    var dashboardRefresh = document.getElementById('dashboard-refresh-btn');
+    if (dashboardRefresh) dashboardRefresh.addEventListener('click', function() { loadDashboard(); });
+
+    var dashboardPeriod = document.getElementById('dashboard-revenue-period');
+    if (dashboardPeriod) dashboardPeriod.addEventListener('change', function() {
+        dashboardRevenuePeriod = dashboardPeriod.value || 'monthly';
+        loadDashboard();
+    });
+
+    var dashboardExport = document.getElementById('dashboard-revenue-export');
+    if (dashboardExport) dashboardExport.addEventListener('click', exportDashboardRevenue);
+
+    var dashboardViewOrders = document.getElementById('dashboard-view-orders');
+    if (dashboardViewOrders) dashboardViewOrders.addEventListener('click', function() { switchTab('tab-orders'); });
+
+    document.querySelectorAll('[data-dashboard-target]').forEach(function(card) {
+        function openTarget() {
+            var target = card.getAttribute('data-dashboard-target');
+            var filter = card.getAttribute('data-dashboard-filter');
+            if (!target) return;
+            switchTab(target);
+            setTimeout(function() {
+                if (target === 'tab-inventory' && filter === 'low-stock') {
+                    var inventoryFilter = document.getElementById('inv-status-filter');
+                    if (inventoryFilter) {
+                        inventoryFilter.value = 'low-stock';
+                        invCurrentPage = 1;
+                        inventoryFilter.dispatchEvent(new Event('change', { bubbles: true }));
+                    }
+                }
+                if (target === 'tab-orders' && filter === 'attention') {
+                    var orderFilter = document.getElementById('order-status-filter');
+                    if (orderFilter) {
+                        orderFilter.value = 'attention';
+                        orderCurrentPage = 1;
+                        orderFilter.dispatchEvent(new Event('change', { bubbles: true }));
+                    }
+                }
+            }, 80);
+        }
+        card.addEventListener('click', openTarget);
+        card.addEventListener('keydown', function(event) {
+            if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                openTarget();
+            }
+        });
+    });
 
     // Product modal controls
     var closeBtn = document.getElementById('close-modal-btn');

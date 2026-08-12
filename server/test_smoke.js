@@ -189,6 +189,18 @@ async function run() {
     const productPageSource = fs.readFileSync(path.join(__dirname, '..', 'product.html'), 'utf8');
     const productStylesSource = fs.readFileSync(path.join(__dirname, '..', 'product.css'), 'utf8');
     const supportPageSource = fs.readFileSync(path.join(__dirname, '..', 'support.html'), 'utf8');
+    const adminPageSource = fs.readFileSync(path.join(__dirname, '..', 'admin.html'), 'utf8');
+    const adminSource = fs.readFileSync(path.join(__dirname, '..', 'admin.js'), 'utf8');
+    check('admin dashboard uses live metrics and exposes working overview controls',
+        adminPageSource.includes('id="dashboard-refresh-btn"') &&
+        adminPageSource.includes('id="dashboard-revenue-period"') &&
+        adminSource.includes("fetch(API_URL + '/analytics/sales' + dashboardAnalyticsQuery(period)") &&
+        !adminSource.includes("totalEl.textContent = '1,245'") &&
+        !adminSource.includes('var inStock = 870'));
+    check('obsolete browser-only admin password controls are retired',
+        !adminPageSource.includes('modal-settings-password') &&
+        !adminSource.includes('dcKidsAdminPwHash') &&
+        !adminSource.includes('function updatePassword()'));
     check('mobile product page exposes a synchronized quick-add bar',
         productPageSource.includes('id="productMobileBuybar"') &&
         productStylesSource.includes('.product-mobile-buybar') &&
@@ -343,6 +355,11 @@ async function run() {
     check('guest checkout creates order', r.status === 200 && order.success === true);
     check('order number assigned', /^ORD-\d+$/.test(order.order_number || ''), order.order_number);
     check(`retail total = unit x 2 (${unitRetail} x 2)`, close(order.total_amount, unitRetail * 2), `got ${order.total_amount}`);
+    r = await fetch(`${BASE}/api/analytics/sales?period=week`, { headers: auth });
+    const pendingAnalytics = await r.json();
+    check('pending WhatsApp orders are excluded from recognized revenue',
+        r.status === 200 && Number(pendingAnalytics.kpis.totalRevenue || 0) === 0,
+        `got ${pendingAnalytics.kpis && pendingAnalytics.kpis.totalRevenue}`);
 
     // ---- Paystack direct checkout and shared webhook router ----
     r = await fetch(`${BASE}/api/payments/paystack/config`);
@@ -386,6 +403,11 @@ async function run() {
     }};
     r = await postPaystackWebhook(successEvent);
     check('signed Paystack success marks the order paid', r.status === 200 && (await dbGet('SELECT status FROM orders WHERE id = ?', [paidDbOrder.id])).status === 'paid');
+    r = await fetch(`${BASE}/api/analytics/sales?period=week`, { headers: auth });
+    const paidAnalytics = await r.json();
+    check('verified Paystack payment appears in recognized revenue',
+        r.status === 200 && close(Number(paidAnalytics.kpis.totalRevenue || 0), unitRetail),
+        `got ${paidAnalytics.kpis && paidAnalytics.kpis.totalRevenue}`);
     const stockAfterPayment = (await dbGet('SELECT stock FROM products WHERE id = 1')).stock;
     check('successful Paystack payment deducts stock once', stockAfterPayment === Math.max(0, stockBeforePayment - 1), `${stockBeforePayment} -> ${stockAfterPayment}`);
     r = await postPaystackWebhook(successEvent);
