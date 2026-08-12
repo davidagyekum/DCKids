@@ -616,6 +616,25 @@ app.post('/api/auth/google', loginLimiter, async (req, res) => {
             return;
         }
 
+        // The private deployment allowlist is authoritative for store owners.
+        // This also recovers an owner who previously requested access and was
+        // stored as pending before their email was added to OWNER_EMAIL.
+        if (OWNER_EMAILS.includes(mail) && (user.status !== 'active' || user.role !== 'manager')) {
+            try {
+                await new Promise((resolve, reject) => {
+                    db.run(
+                        `UPDATE users SET status = 'active', role = 'manager' WHERE id = ?`,
+                        [user.id],
+                        (updateErr) => updateErr ? reject(updateErr) : resolve()
+                    );
+                });
+            } catch (updateErr) {
+                return serverError(res, updateErr);
+            }
+            user.status = 'active';
+            user.role = 'manager';
+        }
+
         if (user.status === 'pending') return res.status(403).json({ error: 'Your access request is still awaiting approval.' });
         if (user.status === 'rejected') return res.status(403).json({ error: 'Your access request was declined.' });
         if (user.status !== 'active') return res.status(403).json({ error: 'This account is not active.' });
