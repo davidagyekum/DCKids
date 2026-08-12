@@ -26,6 +26,8 @@ process.on('unhandledRejection', (reason) => {
 const IS_PROD = process.env.NODE_ENV === 'production';
 // Comma-separated allowed origins for production, e.g. "https://dckidsbrand.com,https://www.dckidsbrand.com"
 const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || '').split(',').map(s => s.trim()).filter(Boolean);
+const DEFAULT_STORE_BANNER = 'China Pre-Orders are open! Message us on WhatsApp for the current closing date.';
+const LEGACY_STORE_BANNER = "China Pre-Order Window OPEN! Orders close May 18th — Don't miss out!";
 
 // ----- Security headers (helmet-equivalent, zero extra deps) -----
 app.use((req, res, next) => {
@@ -711,10 +713,12 @@ app.get('/api/settings', (req, res) => {
                 wholesale_moq: 10,
                 wholesale_discount: 20,
                 banner_enabled: 1,
-                banner_text: "China Pre-Order Window OPEN! Orders close May 18th — Don't miss out!"
+                banner_text: DEFAULT_STORE_BANNER
             });
         }
-        res.json(row);
+        const settings = { ...row };
+        if (settings.banner_text === LEGACY_STORE_BANNER) settings.banner_text = DEFAULT_STORE_BANNER;
+        res.json(settings);
     });
 });
 

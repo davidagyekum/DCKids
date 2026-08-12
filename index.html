@@ -262,7 +262,7 @@
       }
     }
   </style>
-  <link rel="stylesheet" href="styles.css?v=30">
+  <link rel="stylesheet" href="styles.css?v=136">
 
   <!-- Structured data: Organization + WebSite (SEO + Google rich results) -->
   <script type="application/ld+json">
@@ -432,6 +432,17 @@
       will-change: transform;
     }
     #urgencyBanner .banner-track-wrapper:hover { animation-play-state: paused; }
+    #urgencyBanner::after {
+      content: '';
+      position: absolute;
+      top: 0;
+      right: 0;
+      z-index: 5;
+      width: 52px;
+      height: 100%;
+      background: linear-gradient(90deg, rgba(252,236,236,0), #fcecec 38%);
+      pointer-events: none;
+    }
     @keyframes marquee {
       0%   { transform: translate3d(100vw, 0, 0); }
       100% { transform: translate3d(-100%, 0, 0); }
@@ -439,9 +450,9 @@
   </style>
   <div id="urgencyBanner" class="bg-brand-pink text-gray-800 py-3 px-4 relative flex items-center text-xs md:text-sm font-medium border-b border-black/5 pr-10" style="min-height:40px;">
     <div class="banner-track-wrapper">
-      <span class="banner-track" style="padding-right:60px;"><i class="fas fa-bullhorn text-gray-600 text-sm" style="margin-right:8px;"></i> <strong>China Pre-Order Window OPEN!</strong> Orders close May 18th — Don't miss out! &nbsp;&bull;&nbsp;</span>
-      <span class="banner-track" style="padding-right:60px;" aria-hidden="true"><i class="fas fa-bullhorn text-gray-600 text-sm" style="margin-right:8px;"></i> <strong>China Pre-Order Window OPEN!</strong> Orders close May 18th — Don't miss out! &nbsp;&bull;&nbsp;</span>
-      <span class="banner-track" style="padding-right:60px;" aria-hidden="true"><i class="fas fa-bullhorn text-gray-600 text-sm" style="margin-right:8px;"></i> <strong>China Pre-Order Window OPEN!</strong> Orders close May 18th — Don't miss out! &nbsp;&bull;&nbsp;</span>
+      <span class="banner-track" style="padding-right:60px;"><i class="fas fa-bullhorn text-gray-600 text-sm" style="margin-right:8px;"></i> <strong>China Pre-Orders are open!</strong> Message us on WhatsApp for the current closing date. &nbsp;&bull;&nbsp;</span>
+      <span class="banner-track" style="padding-right:60px;" aria-hidden="true"><i class="fas fa-bullhorn text-gray-600 text-sm" style="margin-right:8px;"></i> <strong>China Pre-Orders are open!</strong> Message us on WhatsApp for the current closing date. &nbsp;&bull;&nbsp;</span>
+      <span class="banner-track" style="padding-right:60px;" aria-hidden="true"><i class="fas fa-bullhorn text-gray-600 text-sm" style="margin-right:8px;"></i> <strong>China Pre-Orders are open!</strong> Message us on WhatsApp for the current closing date. &nbsp;&bull;&nbsp;</span>
     </div>
     <button id="closeBanner" class="absolute right-3 top-1/2 -translate-y-1/2 hover:opacity-75 p-1.5 cursor-pointer rounded-full hover:bg-black/10 transition-colors z-10" aria-label="Close banner" style="background:rgba(255,255,255,0.5);">
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
@@ -1124,7 +1135,7 @@
     .pwa-modal__notnow { flex: 1; background: #fff; border: 1px solid #d1d5db; color: #374151; font-weight: 600; font-size: 15px; padding: 13px; border-radius: 12px; cursor: pointer; transition: background 0.15s; }
     .pwa-modal__notnow:hover { background: #f9fafb; }
     /* Floating "Install" bar — the entry point. The modal opens only when this is tapped. */
-    .pwa-fab { position: fixed; left: 16px; bottom: 18px; z-index: 8999; display: none; align-items: center; gap: 8px; background: #1f9d57; color: #fff; border: none; border-radius: 999px; padding: 11px 17px; font-family: Inter, system-ui, sans-serif; font-weight: 700; font-size: 14px; cursor: pointer; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.22); animation: pwaPop 0.3s cubic-bezier(0.34, 1.56, 0.64, 1); }
+    .pwa-fab { position: fixed; left: 16px; bottom: 18px; z-index: 850; display: none; align-items: center; gap: 8px; background: #1f9d57; color: #fff; border: none; border-radius: 999px; padding: 11px 17px; font-family: Inter, system-ui, sans-serif; font-weight: 700; font-size: 14px; cursor: pointer; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.22); animation: pwaPop 0.3s cubic-bezier(0.34, 1.56, 0.64, 1); }
     .pwa-fab:hover { background: #187a4a; }
     .pwa-fab svg { width: 18px; height: 18px; }
     @media (max-width: 480px) {

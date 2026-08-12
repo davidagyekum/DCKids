@@ -173,6 +173,18 @@ async function run() {
         storefrontSource.includes('checkoutValidationError') && storefrontSource.includes('checkoutBackBtn'));
     check('Paystack validation returns customers to their missing details',
         appSource.includes('showValidationError') && appSource.includes('Enter a valid email address to pay with Paystack.'));
+    const sharedStylesSource = fs.readFileSync(path.join(__dirname, '..', 'styles.css'), 'utf8');
+    check('install prompt remains below drawers and checkout overlays',
+        storefrontSource.includes('.pwa-fab { position: fixed; left: 16px; bottom: 18px; z-index: 850;'));
+    check('mobile drawer accounts for dynamic viewport and safe-area height',
+        sharedStylesSource.includes('height: calc(100dvh - 64px);') &&
+        sharedStylesSource.includes('env(safe-area-inset-bottom, 0px)'));
+    check('mobile account tabs expose overflow and active dark-mode contrast',
+        sharedStylesSource.includes('scrollbar-color: #6aa789 transparent;') &&
+        sharedStylesSource.includes('.account-tab.is-active { color: #9de0bf;'));
+    check('pre-order banner avoids stale dated messaging',
+        storefrontSource.includes('Message us on WhatsApp for the current closing date.') &&
+        !storefrontSource.includes('Orders close May 18th'));
 
     // ---- static frontend ----
     for (const page of ['/', '/admin.html', '/track.html', '/account.html', '/product.html?id=1']) {
@@ -500,6 +512,8 @@ async function run() {
 
     // ---- wholesale: per-piece discount, MOQ floor ----
     const settings = await (await fetch(`${BASE}/api/settings`)).json();
+    check('store settings use evergreen preorder messaging',
+        settings.banner_text === 'China Pre-Orders are open! Message us on WhatsApp for the current closing date.');
     const moq = settings.wholesale_moq;
     const disc = settings.wholesale_discount;
     const unitWs = Math.round(unitRetail * (1 - disc / 100) * 100) / 100;

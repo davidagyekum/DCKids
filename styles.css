@@ -249,9 +249,20 @@
   .account-auth__smile { display: none; }
   .account-auth__panel { margin: 32px auto 48px; }
   .account-shell { grid-template-columns: 1fr; gap: 24px; }
-  .account-tabs { position: static; display: flex; overflow-x: auto; padding-bottom: 4px; scrollbar-width: none; }
-  .account-tabs::-webkit-scrollbar { display: none; }
-  .account-tab { min-width: max-content; border: 1px solid var(--account-border); border-left-width: 1px; }
+  .account-tabs {
+    position: static;
+    display: flex;
+    overflow-x: auto;
+    padding: 0 8px 8px 0;
+    scroll-padding-inline: 8px;
+    scroll-snap-type: x proximity;
+    scrollbar-color: #6aa789 transparent;
+    scrollbar-width: thin;
+  }
+  .account-tabs::-webkit-scrollbar { display: block; height: 4px; }
+  .account-tabs::-webkit-scrollbar-track { background: transparent; }
+  .account-tabs::-webkit-scrollbar-thumb { background: #6aa789; border-radius: 999px; }
+  .account-tab { min-width: max-content; border: 1px solid var(--account-border); border-left-width: 1px; scroll-snap-align: start; }
   .account-tab.is-active { border-color: var(--account-green); }
   .account-product-list { grid-template-columns: 1fr 1fr; }
   .account-product:nth-child(3n) { border-right: 1px solid var(--account-border); }
@@ -302,6 +313,7 @@
   .account-text-btn, .account-footer a, .account-secondary-btn { color: #84d5b0; }
   .account-tab { color: #dce8e2; }
   .account-tab:hover, .account-tab.is-active, .account-google-btn:hover, .account-secondary-btn:hover, .account-icon-btn:hover { background: #1b3026; }
+  .account-tab.is-active { color: #9de0bf; border-color: #6aa789; }
   .account-row strong, .account-address-row__copy strong, .account-product strong { color: #edf5f1; }
   .account-notice { background: #321a21; color: #ffc4d1; border-color: #6d3342; }
   .account-notice.is-success { background: #193226; color: #b9e9d1; border-color: #356b50; }
@@ -446,7 +458,9 @@ ul { list-style: none; }
 .nav-drawer {
   position: fixed;
   top: 64px; left: 0;
-  width: 300px; height: calc(100vh - 64px);
+  width: min(86vw, 320px);
+  height: calc(100vh - 64px);
+  height: calc(100dvh - 64px);
   background: rgba(255,255,255,0.15);
   backdrop-filter: blur(40px) saturate(2);
   -webkit-backdrop-filter: blur(40px) saturate(2);
@@ -455,9 +469,15 @@ ul { list-style: none; }
   z-index: 999;
   transform: translateX(-100%);
   transition: transform var(--transition-slow);
-  padding: 16px 0;
+  padding: 16px 0 calc(28px + env(safe-area-inset-bottom, 0px));
   overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-color: rgba(94, 156, 126, .65) transparent;
+  scrollbar-width: thin;
 }
+.nav-drawer::-webkit-scrollbar { width: 5px; }
+.nav-drawer::-webkit-scrollbar-track { background: transparent; }
+.nav-drawer::-webkit-scrollbar-thumb { background: rgba(94, 156, 126, .65); border-radius: 999px; }
 .nav-drawer.open { transform: translateX(0); }
 
 .nav-drawer__overlay {

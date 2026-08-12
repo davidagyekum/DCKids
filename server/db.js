@@ -4,6 +4,8 @@ const path = require('path');
 const dbPath = process.env.DB_PATH || path.resolve(__dirname, 'inventory.db');
 const SKU_PREFIXES = { clothing: 'CLO', shoes: 'SHO', accessories: 'ACC', newborn: 'NEW', bedding: 'BED', essentials: 'ESS', feeding: 'FEE', gear: 'GEA', bathcare: 'BAT' };
 const CATEGORY_IMAGES = { clothing: 'images/category-fallbacks/clothing.webp', shoes: 'images/category-fallbacks/shoes.webp', accessories: 'images/category-fallbacks/accessories.webp', newborn: 'images/category-fallbacks/newborn.webp', bedding: 'images/category-fallbacks/bedding.webp', essentials: 'images/category-fallbacks/essentials.webp', feeding: 'images/category-fallbacks/feeding.webp', gear: 'images/category-fallbacks/gear.webp', bathcare: 'images/category-fallbacks/bathcare.webp' };
+const DEFAULT_STORE_BANNER = 'China Pre-Orders are open! Message us on WhatsApp for the current closing date.';
+const LEGACY_STORE_BANNER = "China Pre-Order Window OPEN! Orders close May 18th — Don't miss out!";
 function skuPrefixForCategory(cat) {
     return SKU_PREFIXES[String(cat || '').toLowerCase()] || (String(cat || 'GEN').replace(/[^a-zA-Z]/g, '').slice(0, 3).toUpperCase() || 'GEN');
 }
@@ -529,13 +531,26 @@ const db = new sqlite3.Database(dbPath, (err) => {
             if (err) console.error("Error creating store_settings table", err);
             
             // Seed the initial defaults (safely ignores if row 1 already exists)
-            db.run(`INSERT OR IGNORE INTO store_settings 
+            db.run(`INSERT OR IGNORE INTO store_settings
                 (id, whatsapp_number, wholesale_enabled, wholesale_moq, wholesale_discount, banner_enabled, banner_text) 
                 VALUES 
-                (1, '233549193805', 1, 10, 20, 1, "China Pre-Order Window OPEN! Orders close May 18th — Don't miss out!")`, 
+                (1, '233549193805', 1, 10, 20, 1, ?)`,
+                [DEFAULT_STORE_BANNER],
                 (err) => {
                     if (err) console.error("Error seeding store_settings", err);
-                    else console.log("Default store settings verified.");
+                    else {
+                        console.log("Default store settings verified.");
+                        // Retire only the obsolete seeded message. Announcements
+                        // changed by the shop owner are intentionally untouched.
+                        db.run(
+                            `UPDATE store_settings SET banner_text = ? WHERE id = 1 AND banner_text = ?`,
+                            [DEFAULT_STORE_BANNER, LEGACY_STORE_BANNER],
+                            function (updateErr) {
+                                if (updateErr) console.error('Error refreshing legacy store banner', updateErr);
+                                else if (this.changes) console.log('Legacy store banner refreshed.');
+                            }
+                        );
+                    }
                 }
             );
         });
