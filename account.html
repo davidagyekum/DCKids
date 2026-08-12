@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <meta name="theme-color" content="#0F4C3A">
   <meta name="description" content="Manage your DC Kids Brand profile, orders, delivery addresses, wishlist, and reviews.">
   <title>My Account — DC Kids Brand</title>
@@ -10,7 +10,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Playfair+Display:wght@600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="styles.css?v=136">
+  <link rel="stylesheet" href="styles.css?v=138">
 </head>
 <body class="account-page">
   <header class="account-header">
@@ -33,11 +33,25 @@
     </nav>
   </header>
 
-  <main>
-    <section id="accountLoading" class="account-loading" aria-live="polite">
+  <main id="mainContent">
+    <section id="accountLoading" class="account-loading" role="status" aria-live="polite" aria-atomic="true">
       <span class="account-spinner" aria-hidden="true"></span>
       <p>Loading your secure account…</p>
       <small>Account details require a connection and are never shown from offline cache.</small>
+    </section>
+
+    <section id="accountRecovery" class="account-recovery" role="alert" aria-live="assertive" aria-atomic="true" tabindex="-1" hidden>
+      <div class="account-recovery__icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24"><path d="M12 8v5M12 17h.01"/><circle cx="12" cy="12" r="9"/></svg>
+      </div>
+      <div class="account-recovery__copy">
+        <h2 id="accountRecoveryTitle">We couldn't load your account</h2>
+        <p id="accountRecoveryMessage">Check your connection and try again. Your account information has not been changed.</p>
+        <div class="account-recovery__actions">
+          <button id="accountRecoveryRetry" class="account-primary-btn account-primary-btn--fit" type="button">Try again</button>
+          <a class="account-secondary-btn account-secondary-btn--fit" href="https://wa.me/233549193805?text=Hi%20DC%20Kids%2C%20I%20need%20help%20with%20my%20account." target="_blank" rel="noopener">Contact support</a>
+        </div>
+      </div>
     </section>
 
     <section id="accountAuth" class="account-auth" hidden>
@@ -51,7 +65,7 @@
       </div>
 
       <div class="account-auth__panel">
-        <div id="authMessage" class="account-notice" role="status" aria-live="polite" hidden></div>
+        <div id="authMessage" class="account-notice" role="status" aria-live="polite" aria-atomic="true" hidden></div>
 
         <div id="authSignIn" class="account-auth-view">
           <img class="account-auth__logo" src="icon.png" alt="DC Kids Brand">
@@ -128,25 +142,25 @@
       </div>
       <div class="account-shell">
         <nav class="account-tabs" aria-label="Account sections" role="tablist">
-          <button class="account-tab is-active" type="button" role="tab" aria-selected="true" data-tab="profile">
+          <button id="tab-profile" class="account-tab is-active" type="button" role="tab" aria-selected="true" aria-controls="panel-profile" tabindex="0" data-tab="profile">
             <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg>Profile
           </button>
-          <button class="account-tab" type="button" role="tab" aria-selected="false" data-tab="orders">
+          <button id="tab-orders" class="account-tab" type="button" role="tab" aria-selected="false" aria-controls="panel-orders" tabindex="-1" data-tab="orders">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4ZM3 6h18"/></svg>Orders
           </button>
-          <button class="account-tab" type="button" role="tab" aria-selected="false" data-tab="addresses">
+          <button id="tab-addresses" class="account-tab" type="button" role="tab" aria-selected="false" aria-controls="panel-addresses" tabindex="-1" data-tab="addresses">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 10c0 5-8 12-8 12S4 15 4 10a8 8 0 1 1 16 0Z"/><circle cx="12" cy="10" r="2.5"/></svg>Addresses
           </button>
-          <button class="account-tab" type="button" role="tab" aria-selected="false" data-tab="wishlist">
+          <button id="tab-wishlist" class="account-tab" type="button" role="tab" aria-selected="false" aria-controls="panel-wishlist" tabindex="-1" data-tab="wishlist">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1.1-1.1a5.5 5.5 0 0 0-7.8 7.8L12 21l8.8-8.6a5.5 5.5 0 0 0 0-7.8Z"/></svg>Wishlist
           </button>
-          <button class="account-tab" type="button" role="tab" aria-selected="false" data-tab="reviews">
+          <button id="tab-reviews" class="account-tab" type="button" role="tab" aria-selected="false" aria-controls="panel-reviews" tabindex="-1" data-tab="reviews">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 2 3 6 7 .9-5 4.8 1.2 6.8L12 17.3l-6.2 3.2L7 13.7 2 8.9 9 8Z"/></svg>My reviews
           </button>
         </nav>
 
         <div class="account-content">
-          <section id="panel-profile" class="account-panel" role="tabpanel">
+          <section id="panel-profile" class="account-panel" role="tabpanel" aria-labelledby="tab-profile">
             <div class="account-profile-card">
               <div class="account-profile-summary">
                 <div id="profileInitials" class="account-avatar">DC</div>
@@ -171,22 +185,22 @@
             </div>
           </section>
 
-          <section id="panel-orders" class="account-panel" role="tabpanel" hidden>
+          <section id="panel-orders" class="account-panel" role="tabpanel" aria-labelledby="tab-orders" hidden>
             <div class="account-section-heading"><div><h2>Orders</h2><p>Every order placed while signed in appears here.</p></div></div>
             <div id="ordersList" class="account-list"></div>
           </section>
 
-          <section id="panel-addresses" class="account-panel" role="tabpanel" hidden>
+          <section id="panel-addresses" class="account-panel" role="tabpanel" aria-labelledby="tab-addresses" hidden>
             <div class="account-section-heading"><div><h2>Saved addresses</h2><p>Use these details to make checkout faster.</p></div><button id="addAddress" class="account-primary-btn account-primary-btn--fit" type="button">Add address</button></div>
             <div id="addressesList" class="account-list"></div>
           </section>
 
-          <section id="panel-wishlist" class="account-panel" role="tabpanel" hidden>
+          <section id="panel-wishlist" class="account-panel" role="tabpanel" aria-labelledby="tab-wishlist" hidden>
             <div class="account-section-heading"><div><h2>Wishlist</h2><p>Your saved favourites from every signed-in device.</p></div><a href="/index.html">Continue shopping →</a></div>
             <div id="wishlistList" class="account-product-list"></div>
           </section>
 
-          <section id="panel-reviews" class="account-panel" role="tabpanel" hidden>
+          <section id="panel-reviews" class="account-panel" role="tabpanel" aria-labelledby="tab-reviews" hidden>
             <div class="account-section-heading"><div><h2>My reviews</h2><p>Reviews you have shared with other parents.</p></div></div>
             <div id="reviewsList" class="account-list"></div>
           </section>
@@ -199,8 +213,9 @@
     <form id="addressForm" method="dialog" class="account-form">
       <div class="account-dialog__heading">
         <h2 id="addressDialogTitle">Add address</h2>
-        <button id="closeAddressDialog" type="button" aria-label="Close">×</button>
+        <button id="closeAddressDialog" type="button" aria-label="Close address form"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
       </div>
+      <div id="addressMessage" class="account-notice" role="alert" aria-live="assertive" aria-atomic="true" hidden></div>
       <input id="addressId" type="hidden">
       <label for="addressLabel">Label</label>
       <input id="addressLabel" type="text" maxlength="40" placeholder="Home or Work" required>
@@ -222,6 +237,6 @@
   </dialog>
 
   <footer class="account-footer"><a href="/privacy.html">Privacy</a><span aria-hidden="true"></span><a href="/terms.html">Terms</a></footer>
-  <script type="module" src="account.js?v=2"></script>
+  <script type="module" src="account.js?v=3"></script>
 </body>
 </html>

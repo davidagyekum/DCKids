@@ -2,14 +2,14 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <title>Track your order — DC Kids Brand</title>
   <meta name="description" content="Track your DC Kids Brand order using your order reference and phone number.">
   <meta name="theme-color" content="#0F4C3A">
   <link rel="icon" href="icon.png" type="image/png">
   <link rel="manifest" href="/manifest.json">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Playfair+Display:ital,wght@0,500;0,600;0,700;1,600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="styles.css?v=136">
+  <link rel="stylesheet" href="styles.css?v=138">
   <style>
     html {
       background: linear-gradient(rgba(30, 30, 35, 0.45), rgba(30, 30, 35, 0.45)), url('images/IMG_8409.PNG') no-repeat center center fixed;
@@ -74,9 +74,75 @@
 
     .tk-actions { display: flex; gap: 10px; margin-top: 22px; }
     .tk-btn--outline { background: #fff; border: 1px solid #DDD; color: #444; }
+
+    /* Persistent recovery, semantic state, and warm atelier continuity. */
+    html { background: #FAFAF8; color-scheme: light; }
+    body.tk-page { min-height: 100vh; background: #FAFAF8; color: #1A1A1A; }
+    .tk-page [hidden] { display: none !important; }
+    .tk-page *, .tk-page *::before, .tk-page *::after { box-sizing: border-box; }
+    .tk-page button:focus-visible, .tk-page a:focus-visible, .tk-page input:focus-visible { outline: 3px solid rgba(94,156,126,.34); outline-offset: 2px; }
+    .tk-header { min-height: 82px; padding: calc(8px + env(safe-area-inset-top, 0px)) clamp(16px,4vw,32px) 8px; border-color: #DFE6E2; background: rgba(250,250,248,.96); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); }
+    .tk-header__brand { min-width: 44px; min-height: 44px; display: inline-flex; align-items: center; }
+    .tk-header__brand img { height: 58px; }
+    .tk-header__links a { min-height: 44px; padding-inline: 10px; display: inline-flex; align-items: center; color: #0F4C3A; font-weight: 700; }
+    .tk-shell { width: min(100% - 32px, 640px); max-width: none; margin: clamp(28px,6vw,64px) auto; padding: 0; }
+    .tk-card { padding: clamp(22px,5vw,36px); border-color: #DFE6E2; border-radius: 16px; box-shadow: none; }
+    .tk-title { margin-bottom: 8px; font-size: clamp(30px,6vw,42px); font-weight: 600; line-height: 1.1; letter-spacing: -.02em; }
+    .tk-sub { max-width: 58ch; color: #5F6B66; font-size: 15px; line-height: 1.6; }
+    .tk-field { gap: 7px; margin-bottom: 16px; }
+    .tk-field label { color: #303936; font-size: 13px; font-weight: 700; text-transform: none; letter-spacing: 0; }
+    .tk-field input { min-height: 50px; border: 1.5px solid #C9D4CE; background: #fff; color: #1A1A1A; font-size: 16px; }
+    .tk-field input:focus { border-color: #5E9C7E; box-shadow: 0 0 0 3px rgba(94,156,126,.14); }
+    .tk-field input[aria-invalid="true"] { border-color: #B91C1C; }
+    .tk-btn { min-height: 48px; padding: 12px 16px; border: 1px solid #0F4C3A; border-radius: 10px; display: inline-flex; align-items: center; justify-content: center; font-size: 14px; font-weight: 700; text-align: center; text-decoration: none; transition: background-color .18s ease, transform .18s ease; }
+    .tk-btn:hover { background: #176449; }
+    .tk-btn:disabled { opacity: .58; cursor: wait; transform: none; }
+    .tk-btn--outline { border-color: #B9CBC2; background: #fff; color: #0F4C3A; }
+    .tk-btn--outline:hover { background: #F5F8F6; }
+    .tk-alert { margin: 0 0 20px; padding: 16px; border: 1px solid #E9A9B8; border-radius: 12px; display: grid; grid-template-columns: auto 1fr; gap: 12px; background: #FFF0F0; color: #7F1D1D; }
+    .tk-alert__icon { width: 28px; height: 28px; color: #B91C1C; }
+    .tk-alert__icon svg { width: 100%; height: 100%; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+    .tk-alert h2 { margin: 0; color: #7F1D1D; font-size: 16px; line-height: 1.3; }
+    .tk-alert p { margin: 5px 0 0; color: #7F1D1D; font-size: 14px; line-height: 1.5; }
+    .tk-alert__actions { margin-top: 12px; display: flex; flex-wrap: wrap; gap: 8px; }
+    .tk-alert__actions .tk-btn { min-height: 44px; width: auto; }
+    .tk-result { display: block; }
+    .tk-result:focus { outline: none; }
+    .tk-result__head { border-color: #DFE6E2; }
+    .tk-result__order-label { color: #5F6B66; font-size: 12px; font-weight: 700; }
+    .tk-result__order { margin-top: 4px; color: #1A1A1A; font-size: 20px; font-weight: 700; overflow-wrap: anywhere; }
+    .tk-status-pill { padding: 6px 12px; border-radius: 999px; text-transform: capitalize; }
+    .tk-status-pending { background: #FEF3C7; color: #92400E; }
+    .tk-status-processing { background: #DBEAFE; color: #1E3A8A; }
+    .tk-status-delivered { background: #DCFCE7; color: #166534; }
+    .tk-status-cancelled { background: #FEE2E2; color: #991B1B; }
+    .tk-meta { min-width: 0; border-color: #DFE6E2; }
+    .tk-meta__label { color: #5F6B66; font-size: 12px; font-weight: 700; text-transform: none; }
+    .tk-meta__value { color: #1A1A1A; overflow-wrap: anywhere; }
+    .tk-steps { padding: 0; list-style: none; }
+    .tk-steps::before { background: #DFE6E2; }
+    .tk-step__dot { width: 30px; height: 30px; border-color: #A8B5AF; color: #4B5752; }
+    .tk-step__label { color: #5F6B66; font-size: 12px; font-weight: 600; }
+    .tk-status-delivered, .tk-status-processing, .tk-status-pending, .tk-status-cancelled { font-weight: 700; }
+    .tk-items__title { color: #1A1A1A; font-size: 15px; }
+    .tk-item { gap: 18px; border-color: #E7ECE9; font-size: 14px; }
+    .tk-item__name { color: #303936; overflow-wrap: anywhere; }
+    .tk-item__qty, .tk-empty { color: #5F6B66; font-size: 13px; }
+    .tk-item__price { flex: 0 0 auto; color: #1A1A1A; }
+    .tk-total { border-color: #DFE6E2; font-size: 16px; }
+    .tk-actions { margin-top: 24px; }
+    @media (max-width: 520px) {
+      .tk-shell { width: min(100% - 24px, 640px); margin-block: 20px; }
+      .tk-card { padding: 22px 18px; }
+      .tk-meta-row { grid-template-columns: 1fr; gap: 8px; }
+      .tk-actions { flex-direction: column; }
+      .tk-step__label { font-size: 11px; }
+      .tk-alert { grid-template-columns: 1fr; }
+    }
+    @media (prefers-reduced-motion: reduce) { .tk-page * { scroll-behavior: auto !important; transition: none !important; } }
   </style>
 </head>
-<body>
+<body class="tk-page">
   <header class="tk-header">
     <a href="/" class="tk-header__brand"><img src="icon.png" alt="DC Kids Brand"></a>
     <nav class="tk-header__links">
@@ -84,40 +150,50 @@
     </nav>
   </header>
 
-  <div class="tk-shell">
-    <div class="tk-card">
+  <main class="tk-shell">
+    <section class="tk-card">
       <div id="tk-lookup">
         <h1 class="tk-title">Track your order</h1>
-        <p class="tk-sub">Enter your order reference and the phone number you used at checkout.</p>
-        <div id="tk-error" class="tk-error"></div>
-        <form id="tk-form">
+        <p class="tk-sub" id="tk-form-help">Enter your order reference and the phone number you used at checkout. We only compare the last four phone digits.</p>
+        <section id="tk-error" class="tk-alert" role="alert" aria-live="assertive" aria-atomic="true" tabindex="-1" hidden>
+          <div class="tk-alert__icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 8v5M12 17h.01"/><circle cx="12" cy="12" r="9"/></svg></div>
+          <div>
+            <h2 id="tk-error-title">We couldn't find that order</h2>
+            <p id="tk-error-message">Check the reference and phone number, then try again.</p>
+            <div class="tk-alert__actions">
+              <button id="tk-retry" type="button" class="tk-btn">Try again</button>
+              <a id="tk-error-support" class="tk-btn tk-btn--outline" href="https://wa.me/233549193805" target="_blank" rel="noopener">Contact support</a>
+            </div>
+          </div>
+        </section>
+        <form id="tk-form" aria-describedby="tk-form-help">
           <div class="tk-field">
             <label for="tk-order">Order reference</label>
-            <input type="text" id="tk-order" placeholder="ORD-1042" required>
+            <input type="text" id="tk-order" name="order" placeholder="ORD-1042" maxlength="40" autocomplete="off" autocapitalize="characters" spellcheck="false" required>
           </div>
           <div class="tk-field">
             <label for="tk-phone">Phone number</label>
-            <input type="tel" id="tk-phone" placeholder="0549193805" required>
+            <input type="tel" id="tk-phone" name="phone" placeholder="0549193805" maxlength="30" autocomplete="tel" inputmode="tel" required>
           </div>
-          <button type="submit" class="tk-btn">Track order</button>
+          <button type="submit" class="tk-btn" id="tk-submit">Track order</button>
         </form>
       </div>
 
-      <div id="tk-result" class="tk-result">
+      <section id="tk-result" class="tk-result" role="region" aria-live="polite" aria-labelledby="tk-r-ref" tabindex="-1" hidden>
         <div class="tk-result__head">
-          <div style="flex:1;">
-            <div style="font-size:11px;color:#888;text-transform:uppercase;letter-spacing:0.4px;">Order</div>
-            <div id="tk-r-ref" style="font-size:20px;font-weight:700;color:#222;margin-top:4px;">—</div>
+          <div style="flex:1;min-width:0;">
+            <div class="tk-result__order-label">Order</div>
+            <div id="tk-r-ref" class="tk-result__order">—</div>
           </div>
           <span id="tk-r-status" class="tk-status-pill">—</span>
         </div>
 
-        <div class="tk-steps">
-          <div class="tk-step" data-step="placed"><div class="tk-step__dot">1</div><div class="tk-step__label">Placed</div></div>
-          <div class="tk-step" data-step="processing"><div class="tk-step__dot">2</div><div class="tk-step__label">Processing</div></div>
-          <div class="tk-step" data-step="dispatched"><div class="tk-step__dot">3</div><div class="tk-step__label">Dispatched</div></div>
-          <div class="tk-step" data-step="delivered"><div class="tk-step__dot">4</div><div class="tk-step__label">Delivered</div></div>
-        </div>
+        <ol class="tk-steps" aria-label="Order progress">
+          <li class="tk-step" data-step="placed"><div class="tk-step__dot" aria-hidden="true">1</div><div class="tk-step__label">Placed</div></li>
+          <li class="tk-step" data-step="processing"><div class="tk-step__dot" aria-hidden="true">2</div><div class="tk-step__label">Processing</div></li>
+          <li class="tk-step" data-step="dispatched"><div class="tk-step__dot" aria-hidden="true">3</div><div class="tk-step__label">Dispatched</div></li>
+          <li class="tk-step" data-step="delivered"><div class="tk-step__dot" aria-hidden="true">4</div><div class="tk-step__label">Delivered</div></li>
+        </ol>
 
         <div class="tk-meta-row">
           <div class="tk-meta"><div class="tk-meta__label">Customer</div><div id="tk-r-name" class="tk-meta__value">—</div></div>
@@ -133,27 +209,59 @@
         </div>
 
         <div class="tk-actions">
-          <button type="button" class="tk-btn tk-btn--outline" onclick="tkBack()">Look up another</button>
-          <a id="tk-whatsapp" class="tk-btn" style="display:flex;align-items:center;justify-content:center;text-decoration:none;" href="#">Message us on WhatsApp</a>
+          <button type="button" class="tk-btn tk-btn--outline" onclick="tkBack()">Track another order</button>
+          <a id="tk-whatsapp" class="tk-btn" href="#">Message us on WhatsApp</a>
         </div>
-      </div>
-    </div>
-  </div>
+      </section>
+    </section>
+  </main>
 
   <script>
     (function () {
-      var form = document.getElementById('tk-form');
-      var errorEl = document.getElementById('tk-error');
-      var lookupEl = document.getElementById('tk-lookup');
-      var resultEl = document.getElementById('tk-result');
+      const form = document.getElementById('tk-form');
+      const errorEl = document.getElementById('tk-error');
+      const errorTitle = document.getElementById('tk-error-title');
+      const errorMessage = document.getElementById('tk-error-message');
+      const retryButton = document.getElementById('tk-retry');
+      const submitButton = document.getElementById('tk-submit');
+      const lookupEl = document.getElementById('tk-lookup');
+      const resultEl = document.getElementById('tk-result');
+      const orderInput = document.getElementById('tk-order');
+      const phoneInput = document.getElementById('tk-phone');
+      let lastLookup = null;
+      let submitting = false;
 
-      function showError(msg) { errorEl.textContent = msg; errorEl.style.display = 'block'; setTimeout(function () { errorEl.style.display = 'none'; }, 4000); }
+      function clearError() {
+        errorEl.hidden = true;
+        orderInput.removeAttribute('aria-invalid');
+        phoneInput.removeAttribute('aria-invalid');
+      }
 
-      function fmtMoney(v) { return 'GHS ' + (Number(v) || 0).toLocaleString(); }
-      function fmtDate(s) { try { return new Date(s).toLocaleString(); } catch (e) { return '—'; } }
+      function showError(title, message, invalidField) {
+        errorTitle.textContent = title;
+        errorMessage.textContent = message;
+        errorEl.hidden = false;
+        if (invalidField === 'order' || invalidField === 'both') orderInput.setAttribute('aria-invalid', 'true');
+        if (invalidField === 'phone' || invalidField === 'both') phoneInput.setAttribute('aria-invalid', 'true');
+        errorEl.focus({ preventScroll: true });
+        errorEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      }
+
+      function setBusy(busy) {
+        submitting = busy;
+        submitButton.disabled = busy;
+        submitButton.textContent = busy ? 'Checking order...' : 'Track order';
+        form.setAttribute('aria-busy', String(busy));
+      }
+
+      function fmtMoney(value) { return 'GHS ' + (Number(value) || 0).toLocaleString('en-GH', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+      function fmtDate(value) {
+        const date = new Date(value);
+        return Number.isNaN(date.getTime()) ? '—' : date.toLocaleString('en-GH');
+      }
 
       function statusToStep(status) {
-        var s = (status || '').toLowerCase();
+        const s = (status || '').toLowerCase();
         if (s.indexOf('cancel') >= 0) return -1;
         if (s.indexOf('deliver') >= 0 || s.indexOf('complete') >= 0) return 4;
         if (s.indexOf('dispatch') >= 0 || s.indexOf('shipped') >= 0) return 3;
@@ -161,25 +269,29 @@
         return 1; // pending / pending_deposit
       }
       function statusClass(status) {
-        var s = (status || '').toLowerCase();
+        const s = (status || '').toLowerCase();
         if (s.indexOf('cancel') >= 0) return 'tk-status-cancelled';
         if (s.indexOf('deliver') >= 0 || s.indexOf('complete') >= 0) return 'tk-status-delivered';
         if (s.indexOf('process') >= 0 || s.indexOf('dispatch') >= 0) return 'tk-status-processing';
         return 'tk-status-pending';
       }
       function renderSteps(currentIdx) {
-        var steps = document.querySelectorAll('.tk-step');
+        const steps = document.querySelectorAll('.tk-step');
         steps.forEach(function (st, i) {
           st.classList.remove('tk-step--done', 'tk-step--current');
+          st.removeAttribute('aria-current');
           if (currentIdx === -1) return; // cancelled: no progress
           if (i + 1 < currentIdx) st.classList.add('tk-step--done');
-          else if (i + 1 === currentIdx) st.classList.add('tk-step--current');
+          else if (i + 1 === currentIdx) {
+            st.classList.add('tk-step--current');
+            st.setAttribute('aria-current', 'step');
+          }
         });
       }
 
       function render(data) {
         document.getElementById('tk-r-ref').textContent = data.order_number;
-        var sEl = document.getElementById('tk-r-status');
+        const sEl = document.getElementById('tk-r-status');
         sEl.textContent = data.status || 'pending';
         sEl.className = 'tk-status-pill ' + statusClass(data.status);
         document.getElementById('tk-r-name').textContent = data.customer_name || '—';
@@ -188,9 +300,9 @@
         document.getElementById('tk-r-type').textContent = data.order_type || 'retail';
         document.getElementById('tk-r-total').textContent = fmtMoney(data.total_amount);
 
-        var itemsEl = document.getElementById('tk-r-items');
+        const itemsEl = document.getElementById('tk-r-items');
         if (!data.items || data.items.length === 0) {
-          itemsEl.innerHTML = '<div style="color:#888;font-size:13px;padding:8px 0;">No items recorded.</div>';
+          itemsEl.innerHTML = '<div class="tk-empty">Item details are not available for this order.</div>';
         } else {
           itemsEl.innerHTML = data.items.map(function (it) {
             return '<div class="tk-item"><div><div class="tk-item__name">' + esc(it.product_name) + '</div><div class="tk-item__qty">Qty ' + (it.quantity || 1) + '</div></div><div class="tk-item__price">' + fmtMoney(it.price_at_time) + '</div></div>';
@@ -199,40 +311,81 @@
         renderSteps(statusToStep(data.status));
 
         // WhatsApp deep-link
-        var msg = encodeURIComponent('Hello DC Kids, I have a question about order ' + data.order_number + '.');
+        const msg = encodeURIComponent('Hello DC Kids, I have a question about order ' + data.order_number + '.');
         document.getElementById('tk-whatsapp').href = 'https://wa.me/233549193805?text=' + msg;
 
-        lookupEl.style.display = 'none';
-        resultEl.style.display = 'block';
+        lookupEl.hidden = true;
+        resultEl.hidden = false;
+        resultEl.focus({ preventScroll: true });
+        resultEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
       }
 
-      form.addEventListener('submit', function (e) {
-        e.preventDefault();
-        var order = document.getElementById('tk-order').value.trim();
-        var phone = document.getElementById('tk-phone').value.trim();
-        if (!order || !phone) return;
-        fetch('/api/orders/track', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ order_number: order, phone: phone })
-        })
-        .then(function (r) { return r.json().then(function (d) { if (!r.ok) throw new Error(d.error || 'Lookup failed'); return d; }); })
-        .then(render)
-        .catch(function (err) { showError(err.message); });
+      async function lookupOrder(order, phone) {
+        if (submitting) return;
+        lastLookup = { order: order, phone: phone };
+        clearError();
+        setBusy(true);
+        const supportMessage = encodeURIComponent('Hello DC Kids, I need help tracking order ' + order + '.');
+        document.getElementById('tk-error-support').href = 'https://wa.me/233549193805?text=' + supportMessage;
+        try {
+          const response = await fetch('/api/orders/track', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ order_number: order, phone: phone })
+          });
+          const payload = await response.json().catch(function () { return {}; });
+          if (!response.ok) {
+            const requestError = new Error(payload.error || 'Order tracking is temporarily unavailable.');
+            requestError.status = response.status;
+            throw requestError;
+          }
+          render(payload);
+        } catch (error) {
+          if (!navigator.onLine || error instanceof TypeError) {
+            showError('You appear to be offline', 'Reconnect to the internet, then use Try again. Your details are still here.');
+          } else if (error.status === 404) {
+            showError("We couldn't find that order", 'Check the order reference exactly as it appears in your confirmation message.', 'order');
+          } else if (error.status === 403) {
+            showError('The phone details do not match', 'Enter the phone number used at checkout. We only compare its last four digits.', 'phone');
+          } else if (error.status === 400) {
+            showError('Check your tracking details', error.message, 'both');
+          } else if (error.status === 429) {
+            showError('Too many tracking attempts', 'Wait a few minutes before trying again, or contact support if the order is urgent.');
+          } else {
+            showError('Tracking is temporarily unavailable', 'Your order is safe. Try again, or contact support with your order reference.');
+          }
+        } finally {
+          setBusy(false);
+        }
+      }
+
+      form.addEventListener('submit', function (event) {
+        event.preventDefault();
+        if (!form.reportValidity()) return;
+        lookupOrder(orderInput.value.trim().toUpperCase(), phoneInput.value.trim());
+      });
+
+      retryButton.addEventListener('click', function () {
+        if (lastLookup) lookupOrder(lastLookup.order, lastLookup.phone);
+        else form.requestSubmit();
       });
 
       window.tkBack = function () {
-        resultEl.style.display = 'none';
-        lookupEl.style.display = 'block';
-        document.getElementById('tk-order').value = '';
-        document.getElementById('tk-phone').value = '';
+        resultEl.hidden = true;
+        lookupEl.hidden = false;
+        clearError();
+        orderInput.focus();
+        orderInput.select();
       };
 
       function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' })[c]; }); }
 
       // Pre-fill order from ?order=XXX (e.g. when linked from My Account)
-      var qs = new URLSearchParams(location.search);
-      if (qs.get('order')) document.getElementById('tk-order').value = qs.get('order');
+      const qs = new URLSearchParams(location.search);
+      if (qs.get('order')) orderInput.value = qs.get('order');
+      window.addEventListener('offline', function () {
+        showError('You are offline', 'Reconnect to track an order. Your entered details will remain on this page.');
+      });
     })();
   </script>
 </body>

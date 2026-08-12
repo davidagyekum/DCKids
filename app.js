@@ -629,23 +629,44 @@ if (closeBanner && urgencyBanner) {
 
 // ── Promo Carousel ──
 (function initCarousel() {
+  const carousel = document.getElementById('promoCarousel');
   const track = document.getElementById('promoTrack');
   const dotsContainer = document.getElementById('promoDots');
-  if (!track || !dotsContainer) return;
+  if (!carousel || !track || !dotsContainer) return;
   const slides = track.querySelectorAll('.promo-carousel__slide');
+  const reducedMotionQuery = window.matchMedia('(prefers-reduced-motion: reduce)');
+  const mobileQuery = window.matchMedia('(max-width: 767px)');
   let current = 0;
+  let autoAdvanceId = null;
   const total = slides.length;
   for (let i = 0; i < total; i++) {
     const dot = document.createElement('button');
+    dot.type = 'button';
     dot.className = 'promo-carousel__dot' + (i === 0 ? ' active' : '');
-    dot.setAttribute('aria-label', `Slide ${i + 1}`);
+    dot.setAttribute('aria-label', `Show slide ${i + 1} of ${total}`);
     dot.addEventListener('click', () => goTo(i));
     dotsContainer.appendChild(dot);
   }
   function goTo(index) {
     current = ((index % total) + total) % total;
     track.style.transform = `translateX(-${current * 100}%)`;
-    dotsContainer.querySelectorAll('.promo-carousel__dot').forEach((d, i) => d.classList.toggle('active', i === current));
+    dotsContainer.querySelectorAll('.promo-carousel__dot').forEach((dot, i) => {
+      const isCurrent = i === current;
+      dot.classList.toggle('active', isCurrent);
+      if (isCurrent) dot.setAttribute('aria-current', 'true');
+      else dot.removeAttribute('aria-current');
+    });
+    slides.forEach((slide, i) => slide.setAttribute('aria-hidden', String(i !== current)));
+  }
+  function stopAutoAdvance() {
+    if (!autoAdvanceId) return;
+    clearInterval(autoAdvanceId);
+    autoAdvanceId = null;
+  }
+  function startAutoAdvance() {
+    stopAutoAdvance();
+    if (reducedMotionQuery.matches || mobileQuery.matches || document.hidden) return;
+    autoAdvanceId = setInterval(() => goTo(current + 1), 6000);
   }
   // Expose carousel control globally for the arrow buttons
   window.__carouselGoTo = function(direction) {
@@ -653,12 +674,29 @@ if (closeBanner && urgencyBanner) {
     else if (direction === 'next') goTo(current + 1);
     else if (typeof direction === 'number') goTo(direction);
   };
-  setInterval(() => goTo((current + 1) % total), 4000);
+  goTo(0);
+  startAutoAdvance();
+  carousel.addEventListener('mouseenter', stopAutoAdvance);
+  carousel.addEventListener('mouseleave', startAutoAdvance);
+  carousel.addEventListener('focusin', stopAutoAdvance);
+  carousel.addEventListener('focusout', (event) => {
+    if (!carousel.contains(event.relatedTarget)) startAutoAdvance();
+  });
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) stopAutoAdvance();
+    else startAutoAdvance();
+  });
+  reducedMotionQuery.addEventListener('change', startAutoAdvance);
+  mobileQuery.addEventListener('change', startAutoAdvance);
   let startX = 0;
-  track.addEventListener('touchstart', e => { startX = e.touches[0].clientX; }, { passive: true });
+  track.addEventListener('touchstart', e => {
+    stopAutoAdvance();
+    startX = e.touches[0].clientX;
+  }, { passive: true });
   track.addEventListener('touchend', e => {
     const diff = startX - e.changedTouches[0].clientX;
     if (Math.abs(diff) > 50) goTo(diff > 0 ? Math.min(current + 1, total - 1) : Math.max(current - 1, 0));
+    startAutoAdvance();
   }, { passive: true });
 })();
 

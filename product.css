@@ -5,6 +5,7 @@
   min-height: 100vh;
   background: var(--bg-ivory);
   color: var(--charcoal);
+  color-scheme: light;
   font-family: var(--font-body);
 }
 
@@ -41,15 +42,17 @@
 }
 .product-header__inner {
   width: min(100% - 48px, 1380px);
-  min-height: 92px;
+  min-height: 82px;
   margin: 0 auto;
   display: flex;
   align-items: center;
   gap: 34px;
 }
-.product-brand { width: 76px; height: 64px; display: inline-flex; align-items: center; flex: 0 0 auto; }
+.product-brand { width: 72px; height: 58px; display: inline-flex; align-items: center; flex: 0 0 auto; }
 .product-brand img { width: 100%; height: 100%; object-fit: contain; }
 .product-back-link, .product-header__nav a, .product-header__nav button {
+  min-height: 44px;
+  padding-inline: 6px;
   border: 0;
   background: transparent;
   color: var(--charcoal);
@@ -327,10 +330,10 @@
   .product-page { padding-bottom: calc(82px + env(safe-area-inset-bottom, 0px)); }
   .product-header__inner { width: calc(100% - 28px); min-height: 70px; gap: 12px; }
   .product-brand { width: 60px; height: 52px; }
-  .product-back-link { margin-left: 2px; }
+  .product-back-link { width: 44px; height: 44px; margin-left: 2px; padding: 0; justify-content: center; }
   .product-back-link span, .product-header__nav span:not(.product-cart-count) { display: none; }
   .product-header__nav { gap: 7px; }
-  .product-header__nav a, .product-header__nav button { width: 42px; height: 42px; justify-content: center; }
+  .product-header__nav a, .product-header__nav button { width: 44px; height: 44px; padding: 0; justify-content: center; }
   .product-cart-count { position: absolute; top: 0; right: -2px; }
 
   .product-hero { width: calc(100% - 28px); padding: 14px 0 42px; gap: 22px; }
@@ -383,36 +386,6 @@
   .product-mobile-buybar button { min-height: 48px; border: 1px solid var(--green-primary); border-radius: 9px; background: var(--green-primary); color: #fff; font-weight: 700; cursor: pointer; }
   .product-mobile-buybar button:disabled { border-color: #c8cfcc; background: #c8cfcc; color: #66706c; cursor: not-allowed; }
   .product-toast { bottom: calc(88px + env(safe-area-inset-bottom, 0px)); }
-}
-
-@media (prefers-color-scheme: dark) {
-  .product-page {
-    --product-border: #31443c;
-    --product-muted: #a9b8b1;
-    --bg-ivory: #101a16;
-    --charcoal: #edf5f1;
-    background: #101a16;
-    color: #edf5f1;
-  }
-  .product-header { background: rgba(16, 26, 22, .96); border-color: #31443c; }
-  .product-back-link, .product-header__nav a, .product-header__nav button { color: #edf5f1; }
-  .product-gallery__main, .product-thumbnail, .product-related-card__image, .product-cart-item img { background: #1a2922; }
-  .product-purchase h1, .product-price, .product-info-row h2, .product-related h2, .product-review-summary strong, .product-cart-drawer__header h2 { color: #a8e1c5; }
-  .product-breadcrumb, .product-breadcrumb a, .product-detail-list dt, .product-option-heading, .product-option-block--quantity label, .product-review__header strong, .product-review-form label { color: #dce8e2; }
-  .product-info-row > p, .product-review p, .product-assurances li { color: #c6d3cd; }
-  .product-size-button, .product-quantity, .product-review-form, .product-review-form input, .product-review-form textarea, .product-related-card, .product-cart-drawer, .product-cart-item__controls button { background: #14211b; color: #edf5f1; border-color: #435a50; }
-  .product-quantity input { background: #14211b; color: #edf5f1; }
-  .product-size-button.is-active { background: #85c8a7; border-color: #85c8a7; color: #0f2119; }
-  .product-quantity button:hover { background: #1b3026; }
-  .product-action--secondary { border-color: #78b796; color: #9fe1bd; }
-  .product-action--secondary:hover { background: #1b3026; }
-  .product-footer { background: #14211b; border-color: #31443c; }
-  .product-footer h2, .product-footer a:hover { color: #a8e1c5; }
-  .product-footer a { color: #bdcac4; }
-  .product-cart-drawer__footer { background: #101a16; }
-  .product-image-label { background: rgba(20, 33, 27, .92); color: #b9e9d1; }
-  .product-mobile-buybar { background: rgba(16, 26, 22, .96); }
-  .product-mobile-buybar strong { color: #a8e1c5; }
 }
 
 @media (prefers-reduced-motion: reduce) {

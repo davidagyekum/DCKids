@@ -4,6 +4,8 @@ const Auth = window.DCKidsAuth;
 const data = { customer: null, orders: [], addresses: [], wishlist: [], reviews: [] };
 let activeTab = 'profile';
 let loadedCustomerId = null;
+let accountRecoveryAction = null;
+let accountRecoveryOffline = false;
 
 const $ = (id) => document.getElementById(id);
 const escapeHtml = (value) => String(value == null ? '' : value).replace(/[&<>"']/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]);
@@ -19,7 +21,43 @@ function notice(message, kind = 'error') {
   if (!element) return;
   element.textContent = message || '';
   element.classList.toggle('is-success', kind === 'success');
+  element.setAttribute('role', kind === 'success' ? 'status' : 'alert');
+  element.setAttribute('aria-live', kind === 'success' ? 'polite' : 'assertive');
   element.hidden = !message;
+}
+
+function noticeAddress(message) {
+  const element = $('addressMessage');
+  if (!element) return;
+  element.textContent = message || '';
+  element.hidden = !message;
+}
+
+function recoveryCopy(error, fallback) {
+  if (!navigator.onLine) return 'Reconnect to the internet, then try again. Your account information has not been changed.';
+  return String((error && error.message) || fallback || 'The request could not be completed.');
+}
+
+function clearRecovery() {
+  const recovery = $('accountRecovery');
+  if (recovery) recovery.hidden = true;
+  accountRecoveryAction = null;
+  accountRecoveryOffline = false;
+}
+
+function showRecovery(title, message, retryAction, offline = !navigator.onLine) {
+  const recovery = $('accountRecovery');
+  if (!recovery) return;
+  $('accountRecoveryTitle').textContent = title;
+  $('accountRecoveryMessage').textContent = message;
+  accountRecoveryAction = typeof retryAction === 'function' ? retryAction : null;
+  accountRecoveryOffline = offline;
+  const retryButton = $('accountRecoveryRetry');
+  retryButton.hidden = !accountRecoveryAction;
+  retryButton.disabled = offline;
+  recovery.hidden = false;
+  recovery.focus({ preventScroll: true });
+  recovery.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
 function showAuthView(view) {
@@ -30,6 +68,7 @@ function showAuthView(view) {
 
 function setBusy(button, busy, busyText) {
   if (!button) return;
+  button.setAttribute('aria-busy', String(busy));
   if (busy) {
     button.dataset.originalText = button.textContent;
     button.textContent = busyText || 'Please wait…';
@@ -63,6 +102,7 @@ async function loadAccountData(force = false) {
   if (!state.customer) return;
   if (!force && loadedCustomerId === state.customer.id) return;
   data.customer = state.customer;
+  $('accountDashboard').setAttribute('aria-busy', 'true');
   try {
     await mergeGuestWishlist();
     const [customer, orders, addresses, wishlist, reviews] = await Promise.all([
@@ -78,9 +118,20 @@ async function loadAccountData(force = false) {
     data.wishlist = wishlist;
     data.reviews = reviews;
     loadedCustomerId = customer.id;
+    clearRecovery();
     renderDashboard();
+    $('accountDashboard').setAttribute('aria-busy', 'false');
   } catch (error) {
-    notice(error.message);
+    renderProfile();
+    const unavailable = '<div class="account-empty">This information is temporarily unavailable. Use the recovery action above to try again.</div>';
+    $('recentOrders').innerHTML = unavailable;
+    $('ordersList').innerHTML = unavailable;
+    $('addressesList').innerHTML = unavailable;
+    $('wishlistList').innerHTML = unavailable;
+    $('reviewsList').innerHTML = unavailable;
+    openTab(activeTab);
+    $('accountDashboard').setAttribute('aria-busy', 'false');
+    showRecovery("We couldn't refresh your account", recoveryCopy(error), () => loadAccountData(true));
   }
 }
 
@@ -176,6 +227,7 @@ function openTab(tab) {
     const selected = button.dataset.tab === tab;
     button.classList.toggle('is-active', selected);
     button.setAttribute('aria-selected', String(selected));
+    button.tabIndex = selected ? 0 : -1;
   });
   document.querySelectorAll('.account-panel').forEach((panel) => { panel.hidden = panel.id !== `panel-${tab}`; });
 }
@@ -202,6 +254,7 @@ function renderAuthState(state) {
 }
 
 function openAddressDialog(address) {
+  noticeAddress('');
   $('addressDialogTitle').textContent = address ? 'Edit address' : 'Add address';
   $('addressId').value = address ? address.id : '';
   $('addressLabel').value = address ? address.label || '' : 'Home';
@@ -217,7 +270,34 @@ function openAddressDialog(address) {
 
 document.querySelectorAll('[data-auth-view]').forEach((button) => button.addEventListener('click', () => showAuthView(button.dataset.authView)));
 document.querySelectorAll('.account-tab').forEach((button) => button.addEventListener('click', () => openTab(button.dataset.tab)));
+document.querySelector('.account-tabs').addEventListener('keydown', (event) => {
+  if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+  const tabs = Array.from(document.querySelectorAll('.account-tab'));
+  const currentIndex = tabs.indexOf(document.activeElement);
+  if (currentIndex < 0) return;
+  event.preventDefault();
+  let nextIndex;
+  if (event.key === 'Home') nextIndex = 0;
+  else if (event.key === 'End') nextIndex = tabs.length - 1;
+  else if (event.key === 'ArrowRight') nextIndex = (currentIndex + 1) % tabs.length;
+  else nextIndex = (currentIndex - 1 + tabs.length) % tabs.length;
+  openTab(tabs[nextIndex].dataset.tab);
+  tabs[nextIndex].focus();
+});
 document.querySelectorAll('[data-open-tab]').forEach((button) => button.addEventListener('click', () => openTab(button.dataset.openTab)));
+
+$('accountRecoveryRetry').addEventListener('click', async (event) => {
+  if (!accountRecoveryAction || accountRecoveryOffline) return;
+  const retryAction = accountRecoveryAction;
+  setBusy(event.currentTarget, true, 'Trying again...');
+  try {
+    await retryAction();
+  } catch (error) {
+    showRecovery('The retry did not complete', recoveryCopy(error), retryAction);
+  } finally {
+    setBusy(event.currentTarget, false);
+  }
+});
 
 $('googleSignIn').addEventListener('click', async (event) => {
   const button = event.currentTarget; setBusy(button, true, 'Opening Google…'); notice('');
@@ -226,12 +306,14 @@ $('googleSignIn').addEventListener('click', async (event) => {
 
 $('signInForm').addEventListener('submit', async (event) => {
   event.preventDefault();
+  if (!event.currentTarget.reportValidity()) return;
   const button = event.currentTarget.querySelector('[type="submit"]'); setBusy(button, true, 'Signing in…'); notice('');
   try { await Auth.signInEmail($('signInEmail').value, $('signInPassword').value); } catch (error) { notice(error.message); } finally { setBusy(button, false); }
 });
 
 $('registerForm').addEventListener('submit', async (event) => {
   event.preventDefault();
+  if (!event.currentTarget.reportValidity()) return;
   const password = $('registerPassword').value;
   if (password.length < 8) return notice('Use a password with at least 8 characters.');
   if (password !== $('registerConfirm').value) return notice('The passwords do not match.');
@@ -245,6 +327,7 @@ $('registerForm').addEventListener('submit', async (event) => {
 
 $('resetForm').addEventListener('submit', async (event) => {
   event.preventDefault();
+  if (!event.currentTarget.reportValidity()) return;
   const button = event.currentTarget.querySelector('[type="submit"]'); setBusy(button, true, 'Sending…'); notice('');
   try { await Auth.sendPasswordReset($('resetEmail').value); notice('If an account exists for that email, Firebase has sent a reset link.', 'success'); } catch (error) { notice(error.message); } finally { setBusy(button, false); }
 });
@@ -264,14 +347,19 @@ $('accountSignOut').addEventListener('click', () => Auth.signOut());
 
 $('profileForm').addEventListener('submit', async (event) => {
   event.preventDefault();
+  if (!event.currentTarget.reportValidity()) return;
+  const form = event.currentTarget;
   const button = event.currentTarget.querySelector('[type="submit"]'); setBusy(button, true, 'Saving…');
   let saved = false;
   try {
     const result = await customerJson('/api/customer/me', { method: 'PUT', body: JSON.stringify({ name: $('profileName').value.trim(), phone: $('profilePhone').value.trim() }) });
     data.customer = result.customer;
     renderProfile();
+    clearRecovery();
     saved = true;
-  } catch (error) { window.alert(error.message); } finally {
+  } catch (error) {
+    showRecovery('Your profile was not saved', recoveryCopy(error), () => form.requestSubmit());
+  } finally {
     setBusy(button, false);
     if (saved) {
       button.textContent = 'Saved';
@@ -284,6 +372,8 @@ $('addAddress').addEventListener('click', () => openAddressDialog(null));
 $('closeAddressDialog').addEventListener('click', () => $('addressDialog').close());
 $('addressForm').addEventListener('submit', async (event) => {
   event.preventDefault();
+  if (!event.currentTarget.reportValidity()) return;
+  noticeAddress('');
   const id = $('addressId').value;
   const body = {
     label: $('addressLabel').value.trim(), recipient_name: $('addressRecipient').value.trim(), phone: $('addressPhone').value.trim(),
@@ -296,8 +386,30 @@ $('addressForm').addEventListener('submit', async (event) => {
     $('addressDialog').close();
     loadedCustomerId = null;
     await loadAccountData(true);
-  } catch (error) { window.alert(error.message); } finally { setBusy(button, false); }
+  } catch (error) {
+    noticeAddress(recoveryCopy(error, 'The address was not saved. Check the details and try again.'));
+  } finally { setBusy(button, false); }
 });
+
+async function deleteAddress(address) {
+  try {
+    await customerJson(`/api/customer/addresses/${address.id}`, { method: 'DELETE' });
+    await loadAccountData(true);
+    clearRecovery();
+  } catch (error) {
+    showRecovery('The address was not deleted', recoveryCopy(error), () => deleteAddress(address));
+  }
+}
+
+async function removeWishlistItem(productId) {
+  try {
+    await customerJson(`/api/wishlist/${productId}`, { method: 'DELETE' });
+    await loadAccountData(true);
+    clearRecovery();
+  } catch (error) {
+    showRecovery('The wishlist item was not removed', recoveryCopy(error), () => removeWishlistItem(productId));
+  }
+}
 
 $('addressesList').addEventListener('click', async (event) => {
   const button = event.target.closest('[data-action]'); if (!button) return;
@@ -305,13 +417,23 @@ $('addressesList').addEventListener('click', async (event) => {
   if (!address) return;
   if (button.dataset.action === 'edit-address') return openAddressDialog(address);
   if (button.dataset.action === 'delete-address' && window.confirm(`Delete the ${address.label || 'saved'} address?`)) {
-    try { await customerJson(`/api/customer/addresses/${address.id}`, { method: 'DELETE' }); await loadAccountData(true); } catch (error) { window.alert(error.message); }
+    await deleteAddress(address);
   }
 });
 
 $('wishlistList').addEventListener('click', async (event) => {
   const button = event.target.closest('[data-action="remove-wishlist"]'); if (!button) return;
-  try { await customerJson(`/api/wishlist/${button.dataset.id}`, { method: 'DELETE' }); await loadAccountData(true); } catch (error) { window.alert(error.message); }
+  await removeWishlistItem(button.dataset.id);
+});
+
+window.addEventListener('offline', () => {
+  showRecovery('You are offline', 'Reconnect to continue using your account. Your entered information remains on this page.', () => window.location.reload(), true);
+});
+
+window.addEventListener('online', () => {
+  if (!accountRecoveryOffline) return;
+  const retryAction = accountRecoveryAction || (() => window.location.reload());
+  showRecovery('Connection restored', 'You are back online. Use Try again to continue.', retryAction, false);
 });
 
 Auth.onChange(renderAuthState);

@@ -2,11 +2,11 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <meta name="theme-color" content="#0F4C3A">
   <title>Payment status — DC Kids Brand</title>
   <link rel="icon" href="icon.png">
-  <link rel="stylesheet" href="styles.css?v=136">
+  <link rel="stylesheet" href="styles.css?v=138">
 </head>
 <body class="payment-result-page">
   <header class="payment-result-header">
@@ -14,24 +14,28 @@
     <a href="/account.html">My account</a>
   </header>
   <main class="payment-result-main">
-    <section class="payment-result-card" aria-live="polite">
+    <section class="payment-result-card" id="paymentResultCard" aria-busy="true" tabindex="-1">
       <div class="payment-result-icon" id="paymentResultIcon" aria-hidden="true">
         <span class="payment-result-spinner"></span>
       </div>
-      <p class="payment-result-label">DC Kids secure checkout</p>
-      <h1 id="paymentResultTitle">Confirming your payment</h1>
-      <p id="paymentResultMessage">Please keep this page open while we confirm the transaction securely with Paystack.</p>
+      <div id="paymentResultAnnouncement" role="status" aria-live="polite" aria-atomic="true">
+        <h1 id="paymentResultTitle">Confirming your payment</h1>
+        <p id="paymentResultMessage">Please keep this page open while we confirm the transaction securely with Paystack.</p>
+      </div>
       <dl class="payment-result-details" id="paymentResultDetails" hidden>
         <div><dt>Order</dt><dd id="paymentResultOrder">—</dd></div>
         <div><dt>Status</dt><dd id="paymentResultStatus">—</dd></div>
+        <div><dt>Paystack reference</dt><dd id="paymentResultReference">—</dd></div>
       </dl>
       <div class="payment-result-actions">
+        <button class="payment-result-primary" id="paymentRetryButton" type="button" hidden>Check again</button>
         <a class="payment-result-primary" href="/index.html">Return to shop</a>
         <a class="payment-result-secondary" href="/account.html">View my account</a>
+        <a class="payment-result-secondary" id="paymentSupportLink" href="https://wa.me/233549193805?text=Hi%20DC%20Kids%2C%20I%20need%20help%20confirming%20a%20payment." target="_blank" rel="noopener">Contact payment support</a>
       </div>
       <p class="payment-result-delivery">Product payment does not include delivery. DC Kids will contact you to confirm the delivery charge.</p>
     </section>
   </main>
-  <script src="payment-result.js?v=1"></script>
+  <script src="payment-result.js?v=2"></script>
 </body>
 </html>

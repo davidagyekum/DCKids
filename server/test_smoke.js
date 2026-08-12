@@ -179,9 +179,10 @@ async function run() {
     check('mobile drawer accounts for dynamic viewport and safe-area height',
         sharedStylesSource.includes('height: calc(100dvh - 64px);') &&
         sharedStylesSource.includes('env(safe-area-inset-bottom, 0px)'));
-    check('mobile account tabs expose overflow and active dark-mode contrast',
+    check('mobile account tabs expose overflow and active light-theme contrast',
         sharedStylesSource.includes('scrollbar-color: #6aa789 transparent;') &&
-        sharedStylesSource.includes('.account-tab.is-active { color: #9de0bf;'));
+        sharedStylesSource.includes('.account-tab.is-active { border-color: var(--account-green); }') &&
+        !sharedStylesSource.includes('@media (prefers-color-scheme: dark)'));
     check('pre-order banner avoids stale dated messaging',
         storefrontSource.includes('Message us on WhatsApp for the current closing date.') &&
         !storefrontSource.includes('Orders close May 18th') &&
