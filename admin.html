@@ -611,36 +611,14 @@
           <div class="notification-wrapper">
             <button id="notification-btn" class="header-icon-btn" type="button" aria-label="Notifications" aria-haspopup="true">
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
-              <span id="notification-count" class="notification-badge">3</span>
+              <span id="notification-count" class="notification-badge" style="display:none;">0</span>
             </button>
             <div id="notification-dropdown" class="notification-dropdown" role="menu" aria-label="Notifications list">
               <div class="notification-dropdown-header">
                 <h4>Notifications</h4>
                 <button type="button" class="btn-link" aria-label="Mark all as read">Mark all read</button>
               </div>
-              <ul id="notification-list" class="notification-list">
-                <li class="notification-item unread">
-                  <span class="notification-dot"></span>
-                  <div>
-                    <p class="notification-text">Low stock alert: Baby Romper (3 left)</p>
-                    <time class="notification-time">5 min ago</time>
-                  </div>
-                </li>
-                <li class="notification-item unread">
-                  <span class="notification-dot"></span>
-                  <div>
-                    <p class="notification-text">New order #1042 received</p>
-                    <time class="notification-time">20 min ago</time>
-                  </div>
-                </li>
-                <li class="notification-item unread">
-                  <span class="notification-dot"></span>
-                  <div>
-                    <p class="notification-text">Customer Jane D. registered</p>
-                    <time class="notification-time">1 hr ago</time>
-                  </div>
-                </li>
-              </ul>
+              <ul id="notification-list" class="notification-list"></ul>
             </div>
           </div>
           

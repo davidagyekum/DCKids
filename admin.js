@@ -294,73 +294,43 @@ function saveActivities(activities) {
     localStorage.setItem('dcKidsActivities', JSON.stringify(activities));
 }
 
+function removeLegacyDemoItems(storageKey, matchesDemo) {
+    try {
+        var stored = JSON.parse(localStorage.getItem(storageKey) || '[]');
+        if (!Array.isArray(stored)) return;
+        var cleaned = stored.filter(function(item) { return !matchesDemo(item || {}); });
+        if (cleaned.length !== stored.length) {
+            localStorage.setItem(storageKey, JSON.stringify(cleaned));
+        }
+    } catch (e) {}
+}
+
 function initSeedData() {
-    // Orders
-    if (!localStorage.getItem('dcKidsOrders')) {
-        var now = new Date();
-        var orders = [
-            { id: 'ORD-001', customer: 'Akua Mensah', items: [{ productId: 1, name: 'Baby Romper Set', qty: 2, price: 85 }], total: 170, status: 'delivered', date: new Date(now - 86400000 * 6).toISOString(), notes: 'Gift wrapped' },
-            { id: 'ORD-002', customer: 'Kwame Asante', items: [{ productId: 2, name: 'Kids Sneakers', qty: 1, price: 120 }, { productId: 3, name: 'Floral Dress', qty: 1, price: 95 }], total: 215, status: 'delivered', date: new Date(now - 86400000 * 4).toISOString(), notes: '' },
-            { id: 'ORD-003', customer: 'Ama Owusu', items: [{ productId: 4, name: 'School Bag', qty: 1, price: 150 }], total: 150, status: 'pending', date: new Date(now - 86400000 * 2).toISOString(), notes: 'Express delivery' },
-            { id: 'ORD-004', customer: 'Yaw Boateng', items: [{ productId: 1, name: 'Baby Romper Set', qty: 3, price: 85 }], total: 255, status: 'delivered', date: new Date(now - 86400000 * 8).toISOString(), notes: '' },
-            { id: 'ORD-005', customer: 'Efua Darko', items: [{ productId: 5, name: 'Toddler Sandals', qty: 2, price: 65 }], total: 130, status: 'cancelled', date: new Date(now - 86400000 * 1).toISOString(), notes: 'Customer changed mind' },
-            { id: 'ORD-006', customer: 'Kofi Amoah', items: [{ productId: 2, name: 'Kids Sneakers', qty: 1, price: 120 }], total: 120, status: 'pending', date: new Date(now - 86400000 * 0.5).toISOString(), notes: '' },
-            { id: 'ORD-007', customer: 'Adwoa Poku', items: [{ productId: 3, name: 'Floral Dress', qty: 2, price: 95 }, { productId: 4, name: 'School Bag', qty: 1, price: 150 }], total: 340, status: 'delivered', date: new Date(now - 86400000 * 3).toISOString(), notes: 'Birthday order' },
-            { id: 'ORD-008', customer: 'Nana Agyeman', items: [{ productId: 1, name: 'Baby Romper Set', qty: 1, price: 85 }], total: 85, status: 'delivered', date: new Date(now - 86400000 * 10).toISOString(), notes: '' }
-        ];
-        saveOrders(orders);
+    if (localStorage.getItem('dcKidsDemoSeedsRetired') !== 'true') {
+        var demoOrderCustomers = ['Akua Mensah', 'Kwame Asante', 'Ama Owusu', 'Yaw Boateng', 'Efua Darko', 'Kofi Amoah', 'Adwoa Poku', 'Nana Agyeman'];
+        var demoCustomerNames = ['Akua Mensah', 'Kwame Asante', 'Ama Owusu', 'Yaw Boateng', 'Efua Darko', 'Kofi Amoah'];
+        var demoSupplierNames = ['Little Stars Textiles', 'TinyFeet Footwear', 'BabyComfort Ltd', 'KidsBag World'];
+
+        removeLegacyDemoItems('dcKidsOrders', function(item) {
+            return /^ORD-00[1-8]$/.test(String(item.id || '')) && demoOrderCustomers.indexOf(item.customer) >= 0;
+        });
+        removeLegacyDemoItems('dcKidsCustomers', function(item) {
+            return /^CUST-00[1-6]$/.test(String(item.id || '')) && demoCustomerNames.indexOf(item.name) >= 0;
+        });
+        removeLegacyDemoItems('dcKidsSuppliers', function(item) {
+            return /^SUP-00[1-4]$/.test(String(item.id || '')) && demoSupplierNames.indexOf(item.company) >= 0;
+        });
+        removeLegacyDemoItems('dcKidsNotifications', function(item) {
+            return /^n[1-5]$/.test(String(item.id || ''));
+        });
+        removeLegacyDemoItems('dcKidsActivities', function(item) {
+            return /^(Order ORD-006 placed|Stock updated for Baby Romper Set|New customer Efua Darko registered|System backup completed)/.test(String(item.message || ''));
+        });
+        localStorage.setItem('dcKidsDemoSeedsRetired', 'true');
     }
 
-    // Customers
-    if (!localStorage.getItem('dcKidsCustomers')) {
-        var customers = [
-            { id: 'CUST-001', name: 'Akua Mensah', email: 'akua@email.com', phone: '+233 24 555 0101', address: 'Accra, East Legon', joinDate: '2025-01-15', totalSpent: 425, orderCount: 3, status: 'active' },
-            { id: 'CUST-002', name: 'Kwame Asante', email: 'kwame@email.com', phone: '+233 20 555 0202', address: 'Kumasi, Ahodwo', joinDate: '2025-03-20', totalSpent: 215, orderCount: 1, status: 'active' },
-            { id: 'CUST-003', name: 'Ama Owusu', email: 'ama@email.com', phone: '+233 27 555 0303', address: 'Cape Coast', joinDate: '2025-05-10', totalSpent: 150, orderCount: 1, status: 'active' },
-            { id: 'CUST-004', name: 'Yaw Boateng', email: 'yaw@email.com', phone: '+233 55 555 0404', address: 'Takoradi', joinDate: '2024-11-08', totalSpent: 780, orderCount: 5, status: 'active' },
-            { id: 'CUST-005', name: 'Efua Darko', email: 'efua@email.com', phone: '+233 24 555 0505', address: 'Tema', joinDate: '2025-06-01', totalSpent: 0, orderCount: 0, status: 'inactive' },
-            { id: 'CUST-006', name: 'Kofi Amoah', email: 'kofi@email.com', phone: '+233 50 555 0606', address: 'Accra, Osu', joinDate: '2025-02-14', totalSpent: 340, orderCount: 2, status: 'active' }
-        ];
-        saveCustomers(customers);
-    }
-
-    // Suppliers
-    if (!localStorage.getItem('dcKidsSuppliers')) {
-        var suppliers = [
-            { id: 'SUP-001', company: 'Little Stars Textiles', contact: 'Grace Adjei', email: 'grace@littlestars.com', phone: '+233 30 222 1111', products: 'Clothing, Rompers', status: 'active' },
-            { id: 'SUP-002', company: 'TinyFeet Footwear', contact: 'Michael Osei', email: 'michael@tinyfeet.com', phone: '+233 30 222 2222', products: 'Shoes, Sandals', status: 'active' },
-            { id: 'SUP-003', company: 'BabyComfort Ltd', contact: 'Sarah Mensah', email: 'sarah@babycomfort.com', phone: '+233 30 222 3333', products: 'Bedding, Essentials', status: 'active' },
-            { id: 'SUP-004', company: 'KidsBag World', contact: 'Daniel Tetteh', email: 'daniel@kidsbag.com', phone: '+233 30 222 4444', products: 'Bags, Accessories', status: 'inactive' }
-        ];
-        saveSuppliers(suppliers);
-    }
-
-    // Settings
     if (!localStorage.getItem('dcKidsSettings')) {
         saveSettings({ darkMode: false, notifications: { lowStock: true, orders: true } });
-    }
-
-    // Notifications
-    if (!localStorage.getItem('dcKidsNotifications')) {
-        var notifs = [
-            { id: 'n1', type: 'low-stock', message: 'Baby Romper Set is running low (3 left)', timestamp: new Date(Date.now() - 3600000).toISOString(), read: false },
-            { id: 'n2', type: 'new-order', message: 'New order ORD-006 from Kofi Amoah', timestamp: new Date(Date.now() - 7200000).toISOString(), read: false },
-            { id: 'n3', type: 'sale', message: 'Flash sale generated GHS 1,200 today', timestamp: new Date(Date.now() - 14400000).toISOString(), read: false },
-            { id: 'n4', type: 'new-order', message: 'New order ORD-003 from Ama Owusu', timestamp: new Date(Date.now() - 86400000).toISOString(), read: true },
-            { id: 'n5', type: 'low-stock', message: 'Toddler Sandals stock depleted', timestamp: new Date(Date.now() - 172800000).toISOString(), read: true }
-        ];
-        saveNotifications(notifs);
-    }
-
-    // Activities
-    if (!localStorage.getItem('dcKidsActivities')) {
-        var activities = [
-            { type: 'order', message: 'Order ORD-006 placed by Kofi Amoah', timestamp: new Date(Date.now() - 3600000).toISOString() },
-            { type: 'product', message: 'Stock updated for Baby Romper Set', timestamp: new Date(Date.now() - 7200000).toISOString() },
-            { type: 'customer', message: 'New customer Efua Darko registered', timestamp: new Date(Date.now() - 14400000).toISOString() },
-            { type: 'system', message: 'System backup completed', timestamp: new Date(Date.now() - 86400000).toISOString() }
-        ];
-        saveActivities(activities);
     }
 }
 

@@ -201,6 +201,11 @@ async function run() {
         !adminPageSource.includes('modal-settings-password') &&
         !adminSource.includes('dcKidsAdminPwHash') &&
         !adminSource.includes('function updatePassword()'));
+    check('legacy dashboard demo records and fake notification badge are retired',
+        adminPageSource.includes('id="notification-count" class="notification-badge" style="display:none;">0</span>') &&
+        !adminPageSource.includes('New order #1042 received') &&
+        !adminSource.includes('function seedDemoDataForPreview()') &&
+        adminSource.includes("localStorage.setItem('dcKidsDemoSeedsRetired', 'true')"));
     check('mobile product page exposes a synchronized quick-add bar',
         productPageSource.includes('id="productMobileBuybar"') &&
         productStylesSource.includes('.product-mobile-buybar') &&
