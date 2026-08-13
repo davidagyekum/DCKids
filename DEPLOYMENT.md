@@ -52,7 +52,8 @@ is up to your host:
 | `FIREBASE_API_KEY`, `FIREBASE_AUTH_DOMAIN`, `FIREBASE_PROJECT_ID`, `FIREBASE_APP_ID` | **yes** | Public Firebase web-app configuration used by the customer account page. |
 | `GOOGLE_APPLICATION_CREDENTIALS` / `FIREBASE_SERVICE_ACCOUNT_JSON` | production* | Use an external service-account file path, workload identity, or a sealed JSON environment value on Railway-style hosts. Never expose or commit the JSON. |
 | `PAYSTACK_SECRET_KEY` | direct payments | Server-only Paystack test/live secret. Never expose it to browser code or Git. |
-| `PAYSTACK_LEGACY_WEBHOOK_URL` | shared Paystack integration | Existing app's webhook. DC Kids forwards every valid non-`DCK-` event to this fixed URL. |
+| `PAYSTACK_AKUA_WEBHOOK_URL` | shared Paystack integration | Akua POS webhook. DC Kids forwards valid `AKUA-` events with the original raw body and Paystack signature. Defaults to the verified Akua production endpoint. |
+| `PAYSTACK_LEGACY_WEBHOOK_URL` | shared Paystack integration | Existing app's webhook. Valid references that are neither `DCK-` nor `AKUA-` continue to this fixed URL. |
 
 ## 3. First admin account (passwordless)
 
@@ -89,11 +90,11 @@ Restart the server after changing configuration. `GET /api/customer/auth/config`
 
 ## 5. Paystack direct checkout
 
-1. Configure `PAYSTACK_SECRET_KEY` with a test secret and set `PAYSTACK_LEGACY_WEBHOOK_URL` to the other app's current webhook.
+1. Configure `PAYSTACK_SECRET_KEY` with a test secret, verify `PAYSTACK_AKUA_WEBHOOK_URL`, and preserve `PAYSTACK_LEGACY_WEBHOOK_URL` for the existing app.
 2. Deploy DC Kids over HTTPS, then set the Paystack test webhook to `https://dckidsbrand.com/api/payments/paystack/webhook`.
-3. Complete one `DCK-` test transaction and one transaction from the existing app. Confirm the first becomes paid in DC Kids and the second reaches the legacy webhook unchanged.
+3. Complete one `DCK-` test transaction, one `AKUA-` transaction, and one transaction from the existing app. Confirm DC Kids processes only `DCK-`, Akua receives only `AKUA-`, and the existing app continues receiving its events unchanged.
 4. Configure `SHOP_NOTIFY_EMAIL`, `RESEND_API_KEY`, and a verified `RESEND_FROM` so paid-order details reach the owner.
-5. Only after both test paths pass, switch to the live secret and live webhook. Paystack charges products only; delivery is confirmed separately.
+5. Only after all three test paths pass, switch to the live secret and live webhook. Paystack charges products only; delivery is confirmed separately.
 
 The callback page is not payment authority. Signed Paystack webhooks and server-side verification update orders. Direct checkout remains hidden while the secret is absent.
 

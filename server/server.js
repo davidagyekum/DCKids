@@ -171,6 +171,7 @@ const RESEND_FROM = process.env.RESEND_FROM || 'DC Kids Admin <onboarding@resend
 const APP_URL = process.env.APP_URL || 'http://localhost:3001';
 const SHOP_NOTIFY_EMAIL = String(process.env.SHOP_NOTIFY_EMAIL || '').trim();
 const PAYSTACK_SECRET_KEY = String(process.env.PAYSTACK_SECRET_KEY || '').trim();
+const PAYSTACK_AKUA_WEBHOOK_URL = String(process.env.PAYSTACK_AKUA_WEBHOOK_URL || 'https://akua-pos.vercel.app/api/payments/paystack/webhook').trim();
 const PAYSTACK_LEGACY_WEBHOOK_URL = String(process.env.PAYSTACK_LEGACY_WEBHOOK_URL || '').trim();
 
 // Google Sign-In (optional). When GOOGLE_CLIENT_ID is set, the admin login page
@@ -1725,19 +1726,27 @@ function validPaystackSignature(rawBody, signature) {
     return crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(supplied));
 }
 
-async function forwardLegacyPaystackEvent(rawBody, signature) {
-    const injected = app.get('forwardLegacyPaystackWebhook');
+async function forwardPaystackEvent(rawBody, signature, targetUrl, destination, injectedHandler) {
+    const injected = app.get(injectedHandler);
     if (typeof injected === 'function') return injected(rawBody, signature);
-    if (!PAYSTACK_LEGACY_WEBHOOK_URL) throw paymentError('Legacy Paystack webhook forwarding is not configured', 503);
-    const target = new URL(PAYSTACK_LEGACY_WEBHOOK_URL);
-    if (IS_PROD && target.protocol !== 'https:') throw paymentError('Legacy Paystack webhook must use HTTPS', 503);
+    if (!targetUrl) throw paymentError(`${destination} Paystack webhook forwarding is not configured`, 503);
+    const target = new URL(targetUrl);
+    if (IS_PROD && target.protocol !== 'https:') throw paymentError(`${destination} Paystack webhook must use HTTPS`, 503);
     const response = await fetch(target, {
         method: 'POST', body: rawBody,
         headers: { 'Content-Type': 'application/json', 'x-paystack-signature': signature },
         signal: globalThis.AbortSignal.timeout(10000)
     });
-    if (!response.ok) throw paymentError(`Legacy webhook returned ${response.status}`, 502);
+    if (!response.ok) throw paymentError(`${destination} webhook returned ${response.status}`, 502);
     return { ok: true };
+}
+
+function forwardAkuaPaystackEvent(rawBody, signature) {
+    return forwardPaystackEvent(rawBody, signature, PAYSTACK_AKUA_WEBHOOK_URL, 'Akua', 'forwardAkuaPaystackWebhook');
+}
+
+function forwardLegacyPaystackEvent(rawBody, signature) {
+    return forwardPaystackEvent(rawBody, signature, PAYSTACK_LEGACY_WEBHOOK_URL, 'Legacy', 'forwardLegacyPaystackWebhook');
 }
 
 app.get('/api/payments/paystack/config', (req, res) => {
@@ -1810,9 +1819,13 @@ app.post('/api/payments/paystack/webhook', async (req, res) => {
     const event = req.body || {};
     const reference = String(event.data && event.data.reference || '');
     try {
+        if (reference.startsWith('AKUA-')) {
+            await forwardAkuaPaystackEvent(req.rawBody, signature);
+            return res.json({ received: true, forwarded: true, destination: 'akua' });
+        }
         if (!reference.startsWith('DCK-')) {
             await forwardLegacyPaystackEvent(req.rawBody, signature);
-            return res.json({ received: true, forwarded: true });
+            return res.json({ received: true, forwarded: true, destination: 'legacy' });
         }
         if (event.event === 'charge.success') await processPaystackSuccess(event.data);
         res.json({ received: true });

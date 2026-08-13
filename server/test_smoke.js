@@ -23,6 +23,7 @@ process.env.FIREBASE_AUTH_DOMAIN = 'smoke-test.firebaseapp.com';
 process.env.FIREBASE_PROJECT_ID = 'smoke-test';
 process.env.FIREBASE_APP_ID = '1:123:web:smoke';
 process.env.PAYSTACK_SECRET_KEY = 'paystack-smoke-secret';
+process.env.PAYSTACK_AKUA_WEBHOOK_URL = 'https://akua.example.test/api/payments/paystack/webhook';
 process.env.PAYSTACK_LEGACY_WEBHOOK_URL = 'https://legacy.example.test/paystack';
 process.env.SHOP_NOTIFY_EMAIL = 'shop@test.com';
 
@@ -92,6 +93,9 @@ async function run() {
     });
     let paystackInitializePayload = null;
     let ownerPaymentEmails = 0;
+    let forwardedAkuaWebhookBody = '';
+    let forwardedAkuaWebhookSignature = '';
+    let akuaForwardingShouldFail = false;
     let forwardedWebhookBody = '';
     let forwardingShouldFail = false;
     app.set('paystackApiRequest', async (apiPath, method, payload) => {
@@ -102,6 +106,12 @@ async function run() {
         return { status: 'pending' };
     });
     app.set('sendOrderNotificationEmail', async () => { ownerPaymentEmails++; return { ok: true }; });
+    app.set('forwardAkuaPaystackWebhook', async (rawBody, signature) => {
+        if (akuaForwardingShouldFail) throw new Error('Akua unavailable');
+        forwardedAkuaWebhookBody = rawBody.toString('utf8');
+        forwardedAkuaWebhookSignature = signature;
+        return { ok: true };
+    });
     app.set('forwardLegacyPaystackWebhook', async (rawBody) => {
         if (forwardingShouldFail) throw new Error('legacy unavailable');
         forwardedWebhookBody = rawBody.toString('utf8');
@@ -471,8 +481,27 @@ async function run() {
     check('payment status endpoint returns no PII', r.status === 200 && paidStatus.payment_status === 'paid' && !paidStatus.customer_email && !paidStatus.items);
 
     const legacyEvent = { event: 'charge.success', data: { reference: 'OTHER-APP-123', status: 'success', amount: 5000, currency: 'GHS' } };
+    const akuaEvent = { event: 'charge.success', data: {
+        reference: 'AKUA-1786580096715-b599fee8fef6', status: 'success', amount: 2200, currency: 'GHS',
+        metadata: { source_app: 'akua_inventory', sale_id: 'sale-smoke' }
+    }};
+    const akuaRaw = JSON.stringify(akuaEvent);
+    const akuaSignature = crypto.createHmac('sha512', process.env.PAYSTACK_SECRET_KEY).update(akuaRaw).digest('hex');
+    r = await postPaystackWebhook(akuaEvent);
+    const akuaForwardResult = await r.json();
+    check('AKUA webhook is routed to its isolated destination',
+        r.status === 200 && akuaForwardResult.destination === 'akua' && forwardedWebhookBody === '');
+    check('AKUA forwarding preserves raw body and Paystack signature',
+        forwardedAkuaWebhookBody === akuaRaw && forwardedAkuaWebhookSignature === akuaSignature);
+    akuaForwardingShouldFail = true;
+    r = await postPaystackWebhook(akuaEvent);
+    check('AKUA forwarding failure remains retriable', r.status === 500 || r.status === 502, `status ${r.status}`);
+    akuaForwardingShouldFail = false;
+
     r = await postPaystackWebhook(legacyEvent);
-    check('non-DCK webhook is forwarded unchanged', r.status === 200 && forwardedWebhookBody === JSON.stringify(legacyEvent));
+    const legacyForwardResult = await r.json();
+    check('non-DCK and non-AKUA webhook keeps legacy forwarding unchanged',
+        r.status === 200 && legacyForwardResult.destination === 'legacy' && forwardedWebhookBody === JSON.stringify(legacyEvent));
     forwardingShouldFail = true;
     r = await postPaystackWebhook(legacyEvent);
     check('legacy forwarding failure remains retriable', r.status === 500 || r.status === 502, `status ${r.status}`);
