@@ -426,7 +426,10 @@ async function run() {
 
     // ---- Paystack direct checkout and shared webhook router ----
     r = await fetch(`${BASE}/api/payments/paystack/config`);
-    check('Paystack availability is public without exposing keys', r.status === 200 && (await r.json()).enabled === true);
+    const publicPaystackConfig = await r.json();
+    check('Paystack availability and Akua routing are public without exposing keys',
+        r.status === 200 && publicPaystackConfig.enabled === true && publicPaystackConfig.akua_forwarding === true &&
+        !publicPaystackConfig.secret && !publicPaystackConfig.webhook_url);
     r = await fetch(`${BASE}/api/checkout/paystack`, json('POST', {
         customer_name: 'Direct Guest', customer_phone: '0249000000', customer_email: '',
         order_type: 'retail', items: [{ id: 1, quantity: 1, size: sizeLabel }]

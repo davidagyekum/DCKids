@@ -1751,7 +1751,7 @@ function forwardLegacyPaystackEvent(rawBody, signature) {
 
 app.get('/api/payments/paystack/config', (req, res) => {
     res.setHeader('Cache-Control', 'no-store');
-    res.json({ enabled: Boolean(PAYSTACK_SECRET_KEY) });
+    res.json({ enabled: Boolean(PAYSTACK_SECRET_KEY), akua_forwarding: Boolean(PAYSTACK_AKUA_WEBHOOK_URL) });
 });
 
 app.post('/api/checkout/paystack', optionalCustomer, async (req, res) => {
