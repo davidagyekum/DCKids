@@ -30,6 +30,7 @@ function loadStorage(env, initialize = false) {
             NODE_ENV: 'test',
             RAILWAY_ENVIRONMENT: '',
             RAILWAY_VOLUME_MOUNT_PATH: '',
+            RAILWAY_VOLUME_NAME: '',
             DB_PATH: '',
             UPLOAD_DIR: '',
             BACKUP_DIR: ''
@@ -69,7 +70,12 @@ try {
     });
 
     const volume = path.join(tempRoot, 'railway-volume');
-    const railway = loadStorage({ NODE_ENV: 'production', RAILWAY_ENVIRONMENT: 'production', RAILWAY_VOLUME_MOUNT_PATH: volume });
+    const railway = loadStorage({
+        NODE_ENV: 'production',
+        RAILWAY_ENVIRONMENT: 'production',
+        RAILWAY_VOLUME_MOUNT_PATH: volume,
+        RAILWAY_VOLUME_NAME: 'dckids-data'
+    });
     check('derives database uploads and backups beneath the Railway volume', () => {
         assert.strictEqual(railway.status, 0, railway.stderr);
         const storage = JSON.parse(railway.stdout);
@@ -78,10 +84,24 @@ try {
         assert.strictEqual(storage.BACKUP_DIR, path.join(volume, 'backups'));
     });
 
-    const missingVolume = loadStorage({ NODE_ENV: 'production', RAILWAY_ENVIRONMENT: 'production' });
-    check('rejects Railway production without a mounted volume', () => {
-        assert.notStrictEqual(missingVolume.status, 0);
-        assert.match(missingVolume.stderr, /RAILWAY_VOLUME_MOUNT_PATH/i);
+    const missingVolumePath = loadStorage({
+        NODE_ENV: 'production',
+        RAILWAY_ENVIRONMENT: 'production',
+        RAILWAY_VOLUME_NAME: 'dckids-data'
+    });
+    check('rejects Railway production without the injected volume mount path', () => {
+        assert.notStrictEqual(missingVolumePath.status, 0);
+        assert.match(missingVolumePath.stderr, /RAILWAY_VOLUME_MOUNT_PATH/i);
+    });
+
+    const missingVolumeName = loadStorage({
+        NODE_ENV: 'production',
+        RAILWAY_ENVIRONMENT: 'production',
+        RAILWAY_VOLUME_MOUNT_PATH: volume
+    });
+    check('rejects Railway production without the injected volume name', () => {
+        assert.notStrictEqual(missingVolumeName.status, 0);
+        assert.match(missingVolumeName.stderr, /RAILWAY_VOLUME_NAME/i);
     });
 
     [
@@ -93,6 +113,7 @@ try {
             NODE_ENV: 'production',
             RAILWAY_ENVIRONMENT: 'production',
             RAILWAY_VOLUME_MOUNT_PATH: volume,
+            RAILWAY_VOLUME_NAME: 'dckids-data',
             [name]: outsidePath
         });
         check(`rejects Railway ${name} outside its mounted volume`, () => {
@@ -110,11 +131,35 @@ try {
         NODE_ENV: 'production',
         RAILWAY_ENVIRONMENT: 'production',
         RAILWAY_VOLUME_MOUNT_PATH: volume,
+        RAILWAY_VOLUME_NAME: 'dckids-data',
         UPLOAD_DIR: path.join(uploadsLink, 'not-created-yet')
     });
     check('rejects Railway durable paths whose symlink ancestor escapes the mounted volume', () => {
         assert.notStrictEqual(symlinkEscape.status, 0);
         assert.match(symlinkEscape.stderr, /outside.*mounted volume/i);
+    });
+
+    const publicUploads = path.join(tempRoot, 'public-path-guards', 'uploads');
+    [
+        ['DB_PATH equal to UPLOAD_DIR', { DB_PATH: publicUploads, BACKUP_DIR: path.join(tempRoot, 'private-backups') }],
+        ['DB_PATH nested beneath UPLOAD_DIR', { DB_PATH: path.join(publicUploads, 'inventory.db'), BACKUP_DIR: path.join(tempRoot, 'private-backups') }],
+        ['BACKUP_DIR equal to UPLOAD_DIR', { DB_PATH: path.join(tempRoot, 'private-db', 'inventory.db'), BACKUP_DIR: publicUploads }],
+        ['BACKUP_DIR nested beneath UPLOAD_DIR', { DB_PATH: path.join(tempRoot, 'private-db', 'inventory.db'), BACKUP_DIR: path.join(publicUploads, 'backups') }]
+    ].forEach(([label, configured]) => {
+        const exposedPrivatePath = loadStorage(Object.assign({ UPLOAD_DIR: publicUploads }, configured));
+        check(`rejects ${label}`, () => {
+            assert.notStrictEqual(exposedPrivatePath.status, 0);
+            assert.match(exposedPrivatePath.stderr, /public.*upload|UPLOAD_DIR/i);
+        });
+    });
+
+    const siblingLayout = loadStorage({
+        DB_PATH: path.join(tempRoot, 'safe-layout', 'database', 'inventory.db'),
+        UPLOAD_DIR: path.join(tempRoot, 'safe-layout', 'uploads'),
+        BACKUP_DIR: path.join(tempRoot, 'safe-layout', 'backups')
+    });
+    check('allows database uploads and backups in normal sibling locations', () => {
+        assert.strictEqual(siblingLayout.status, 0, siblingLayout.stderr);
     });
 
     console.log(`\n${passed} passed, 0 failed`);

@@ -2,6 +2,7 @@
 // addressable through the existing public /images URL namespace.
 const assert = require('assert');
 const fs = require('fs');
+const net = require('net');
 const os = require('os');
 const path = require('path');
 const { spawn } = require('child_process');
@@ -12,13 +13,24 @@ const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'dckids-upload-restart-')
 const dbPath = path.join(tempRoot, 'inventory.db');
 const uploadDir = path.join(tempRoot, 'uploads');
 const backupDir = path.join(tempRoot, 'backups');
-const port = 3057;
-const baseUrl = `http://127.0.0.1:${port}`;
+let port;
+let baseUrl;
 const secret = 'storage-upload-test-secret';
 const tinyPng = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Z5xkAAAAASUVORK5CYII=';
 const checkedInFallbackFilename = `product_upload_${Date.now()}_${Math.floor(Math.random() * 10000)}.png`;
 const checkedInFallbackPath = path.join(__dirname, '..', 'images', checkedInFallbackFilename);
 let child;
+
+function requestAvailablePort() {
+    return new Promise((resolve, reject) => {
+        const reservation = net.createServer();
+        reservation.once('error', reject);
+        reservation.listen(0, '127.0.0.1', () => {
+            const assignedPort = reservation.address().port;
+            reservation.close((error) => error ? reject(error) : resolve(assignedPort));
+        });
+    });
+}
 
 function startServer() {
     const environment = Object.assign({}, process.env, {
@@ -32,7 +44,8 @@ function startServer() {
         RESEND_API_KEY: '',
         FIREBASE_PROJECT_ID: '',
         RAILWAY_ENVIRONMENT: '',
-        RAILWAY_VOLUME_MOUNT_PATH: ''
+        RAILWAY_VOLUME_MOUNT_PATH: '',
+        RAILWAY_VOLUME_NAME: ''
     });
     child = spawn(process.execPath, ['server.js'], { cwd: __dirname, env: environment, stdio: ['ignore', 'pipe', 'pipe'] });
     let output = '';
@@ -84,6 +97,8 @@ function setProductImage(productId, imagePath) {
 }
 
 async function run() {
+    port = await requestAvailablePort();
+    baseUrl = `http://127.0.0.1:${port}`;
     startServer();
     await waitForServer();
     const registered = await fetch(`${baseUrl}/api/admin/register`, json('POST', {

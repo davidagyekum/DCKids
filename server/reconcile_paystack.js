@@ -1,12 +1,13 @@
 #!/usr/bin/env node
 /* Offline, idempotent recovery for verified Paystack transaction exports. */
-const fs = require('fs');
 const path = require('path');
+require('dotenv').config({ path: path.join(__dirname, '.env'), override: false });
+const fs = require('fs');
 const sqlite3 = require('sqlite3');
 const { DB_PATH } = require('./storage');
 
 const REVIEW_NOTES = 'Recovered from a verified Paystack export; product and delivery details need confirmation.';
-const REFERENCE_PATTERN = /^DCK-[A-Za-z0-9][A-Za-z0-9-]{0,126}$/;
+const REFERENCE_PATTERN = /^DCK-[0-9]+-[a-f0-9]{20}$/i;
 const ORDER_NUMBER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9-]{0,99}$/;
 const PAYSTACK_CHANNELS = new Set([
     'card', 'bank', 'apple_pay', 'ussd', 'qr', 'mobile_money',
@@ -240,12 +241,14 @@ function rejectedEntry(index, reason, transaction) {
     return entry;
 }
 
-async function uniqueOrderNumber(database, preferred, reference) {
-    if (preferred && !(await dbGet(database, 'SELECT 1 FROM orders WHERE order_number = ?', [preferred]))) return preferred;
+async function uniqueOrderNumber(database, preferred, reference, reservedOrderNumbers = new Set()) {
+    if (preferred && !reservedOrderNumbers.has(preferred) &&
+        !(await dbGet(database, 'SELECT 1 FROM orders WHERE order_number = ?', [preferred]))) return preferred;
     const base = `REC-${reference}`.slice(0, 96);
     let candidate = base;
     let suffix = 1;
-    while (await dbGet(database, 'SELECT 1 FROM orders WHERE order_number = ?', [candidate])) {
+    while (reservedOrderNumbers.has(candidate) ||
+        await dbGet(database, 'SELECT 1 FROM orders WHERE order_number = ?', [candidate])) {
         suffix++;
         candidate = `${base.slice(0, 95 - String(suffix).length)}-${suffix}`;
     }
@@ -328,6 +331,11 @@ async function reconcile(database, records, apply) {
         rejected: []
     };
     let hardFailure = false;
+    const dryRunReservations = apply ? null : {
+        references: new Map(),
+        transactionIds: new Set(),
+        orderNumbers: new Set()
+    };
 
     for (let index = 0; index < records.length; index++) {
         const transaction = normalizeTransaction(records[index]);
@@ -342,14 +350,25 @@ async function reconcile(database, records, apply) {
             report.alreadyPresent.push(reportEntry(transaction, { status: 'already_present', orderNumber: present.order_number }));
             continue;
         }
+        if (dryRunReservations && dryRunReservations.references.has(transaction.reference)) {
+            report.alreadyPresent.push(reportEntry(transaction, {
+                status: 'already_present',
+                orderNumber: dryRunReservations.references.get(transaction.reference)
+            }));
+            continue;
+        }
         const transactionCollision = await dbGet(database,
             'SELECT 1 FROM payments WHERE provider_transaction_id = ?', [transaction.transactionId]);
-        if (transactionCollision) {
+        if (transactionCollision || (dryRunReservations && dryRunReservations.transactionIds.has(transaction.transactionId))) {
             report.rejected.push(rejectedEntry(index, 'transaction_id_conflict', transaction));
             continue;
         }
         if (!apply) {
-            const orderNumber = await uniqueOrderNumber(database, transaction.metadataOrderNumber, transaction.reference);
+            const orderNumber = await uniqueOrderNumber(
+                database, transaction.metadataOrderNumber, transaction.reference, dryRunReservations.orderNumbers);
+            dryRunReservations.references.set(transaction.reference, orderNumber);
+            dryRunReservations.transactionIds.add(transaction.transactionId);
+            dryRunReservations.orderNumbers.add(orderNumber);
             report.wouldRestore.push(reportEntry(transaction, {
                 status: 'would_restore',
                 orderNumber,

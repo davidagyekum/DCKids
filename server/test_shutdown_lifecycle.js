@@ -8,10 +8,20 @@ const path = require('path');
 const { fork } = require('child_process');
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'dckids-shutdown-test-'));
-const testPort = 35000 + Math.floor(Math.random() * 1000);
 const signalBridge = path.join(__dirname, 'test_signal_bridge.js');
 let child = null;
 let socket = null;
+
+function requestAvailablePort() {
+    return new Promise((resolve, reject) => {
+        const reservation = net.createServer();
+        reservation.once('error', reject);
+        reservation.listen(0, '127.0.0.1', () => {
+            const assignedPort = reservation.address().port;
+            reservation.close((error) => error ? reject(error) : resolve(assignedPort));
+        });
+    });
+}
 
 function waitForOutput(pattern, timeoutMs = 10000) {
     return new Promise((resolve, reject) => {
@@ -39,6 +49,7 @@ function waitForExit(timeoutMs = 10000) {
 
 async function run() {
     try {
+        const testPort = await requestAvailablePort();
         child = fork(path.join(__dirname, 'server.js'), [], {
             cwd: __dirname,
             execArgv: ['--require', signalBridge],
@@ -52,6 +63,7 @@ async function run() {
                 RAILWAY_PROJECT_ID: '',
                 RAILWAY_SERVICE_ID: '',
                 RAILWAY_VOLUME_MOUNT_PATH: '',
+                RAILWAY_VOLUME_NAME: '',
                 RESEND_API_KEY: '',
                 FIREBASE_PROJECT_ID: '',
                 OWNER_EMAIL: 'shutdown@test.com',

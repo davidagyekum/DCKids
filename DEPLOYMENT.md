@@ -47,7 +47,8 @@ is up to your host:
 | `RESEND_API_KEY` / `RESEND_FROM` | optional | Sends admin sign-in codes and notification emails via Resend. Unset in production = storefront checkout continues, while admin email-code sign-in and email notifications are disabled; Google/recovery sign-in remains available. In local development, codes are printed to the server log. |
 | `APP_URL` | recommended | Public base URL used in emails (e.g. `https://dckidsbrand.com`). |
 | `PORT` | no | Listening port (default 3000). Most hosts inject this automatically. |
-| `RAILWAY_VOLUME_MOUNT_PATH` | Railway production | Mount a persistent Railway Volume at `/data` and set this exact value to `/data`. The app refuses Railway production without it. |
+| `RAILWAY_VOLUME_MOUNT_PATH` | Railway production | Railway injects `/data` when the Volume is mounted there. Never create or edit this variable manually. The app refuses Railway production without it. |
+| `RAILWAY_VOLUME_NAME` | Railway production | Railway injects the attached Volume name. Never create or edit this variable manually. The app refuses Railway production without it. |
 | `DB_PATH` | Railway production | `/data/inventory.db` (optional only because it is the default when the volume is configured). |
 | `UPLOAD_DIR` | Railway production | `/data/uploads` (optional only because it is the default when the volume is configured). |
 | `BACKUP_DIR` | Railway production | `/data/backups` (optional only because it is the default when the volume is configured). |
@@ -106,10 +107,13 @@ The callback page is not payment authority. Signed Paystack webhooks and server-
 
 - SQLite is authoritative and runs as a **single application instance**. Do not
   scale this service horizontally or attach its `/data` volume to another writer.
-- For Railway production, create one Railway Volume mounted at **`/data`** and
-  set `RAILWAY_VOLUME_MOUNT_PATH=/data`. The resolved paths are
+- For Railway production, create one Railway Volume mounted at **`/data`**.
+  Railway must inject both `RAILWAY_VOLUME_MOUNT_PATH=/data` and
+  `RAILWAY_VOLUME_NAME`; never create or edit either injected variable manually.
+  The resolved paths are
   `DB_PATH=/data/inventory.db`, `UPLOAD_DIR=/data/uploads`, and
-  `BACKUP_DIR=/data/backups`; do not point any of them outside `/data`.
+  `BACKUP_DIR=/data/backups`; do not point any of them outside `/data`, and never
+  put `DB_PATH` or `BACKUP_DIR` at or beneath the publicly served `UPLOAD_DIR`.
 - The database and its `-wal`/`-shm` sidecars hold customer/order data and are
   **gitignored**. Never commit them. Railway health checks call `GET /api/health`,
   which checks SQLite without returning paths, credentials, or record data.
@@ -122,20 +126,42 @@ The callback page is not payment authority. Signed Paystack webhooks and server-
 
 ### Safe Railway cutover and restore
 
-1. Before cutover, create and mount the `/data` volume, set the four variables
-   above, and run the service as exactly one replica.
-2. Run a fresh `node server/backup_db.js`, copy that verified snapshot off the
-   service, then deploy. Wait for `/api/health` to return HTTP 200 with
-   `{"status":"ok","database":"ready","persistentStorage":true}` before
-   sending production traffic.
-3. For a restore, first stop the sole service and wait for its 15-second drain.
-   Preserve the current `/data/inventory.db`, `-wal`, and `-shm` files as an
-   incident copy; replace `inventory.db` with the verified snapshot, and remove
-   only the stale `inventory.db-wal` and `inventory.db-shm` sidecars from that
-   stopped database directory.
-4. Restart one replica, confirm `/api/health` is healthy, then verify a known
-   product and recent order in the admin UI before reopening traffic. Record
-   the controlled restart and backup timestamp in the incident log.
+**Do not attach a Volume or configure its mount before capture is complete.**
+Attaching/configuring a Railway Volume can trigger a deployment; an early deploy
+could start the service against an empty database.
+
+1. Keep the old process and its authoritative database running, pause public
+   ingress, block new admin writes, and let every in-flight write drain. Do not
+   stop or redeploy the old service yet.
+2. While the old database remains accessible, run `node server/backup_db.js`
+   against it. Require the command's successful `PRAGMA integrity_check`, then
+   download the verified snapshot and a complete copy of the existing uploaded
+   product images to off-platform storage.
+3. Query the old database and record independently checkable evidence: known
+   table counts plus several recent order numbers and Paystack references. Keep
+   the backup timestamp, integrity result, counts, and references in the cutover
+   record. Do not proceed if any capture or verification is incomplete.
+4. Only after those artifacts are safely captured, stop the sole service and
+   wait for its 15-second drain to finish. Keep public ingress closed.
+5. With the service stopped, provision/attach the one Volume at `/data`. Confirm
+   Railway injected both `RAILWAY_VOLUME_MOUNT_PATH=/data` and
+   `RAILWAY_VOLUME_NAME`; never create either variable manually.
+6. Still while stopped, restore the verified snapshot to `/data/inventory.db`
+   and restore uploaded images beneath `/data/uploads`. Configure
+   `DB_PATH=/data/inventory.db`, `UPLOAD_DIR=/data/uploads`, and
+   `BACKUP_DIR=/data/backups`.
+7. Start exactly one replica with `node server/server.js`. Require HTTP 200 from
+   `/api/health` with
+   `{"status":"ok","database":"ready","persistentStorage":true}`, then verify
+   the recorded historical counts, order numbers, payment references, and known
+   uploaded images against the restored service.
+8. Perform one controlled restart, repeat health and historical-record checks,
+   record the result, and only then reopen public ingress.
+
+For a later restore into an existing `/data`, first close ingress and stop the
+sole service after draining. Preserve the current database plus `-wal`/`-shm` as
+an incident copy, restore the verified snapshot and uploads while stopped, and
+remove only stale sidecars belonging to that stopped database before step 7.
 
 ### Paystack reconciliation after the 2026-08-19 incident
 
@@ -181,7 +207,9 @@ contain payment references and transaction IDs and should be access-controlled.
 - [ ] `RESEND_API_KEY` + `RESEND_FROM` set (and a domain verified in Resend) so sign-in codes actually email
 - [ ] `APP_URL` set to your public URL (used in emails)
 - [ ] Exactly one Railway replica has a Volume mounted at `/data`
-- [ ] `RAILWAY_VOLUME_MOUNT_PATH=/data` and the resolved `DB_PATH`, `UPLOAD_DIR`, and `BACKUP_DIR` stay under `/data`
+- [ ] Railway injected `RAILWAY_VOLUME_MOUNT_PATH=/data` and `RAILWAY_VOLUME_NAME`; neither was created manually
+- [ ] The resolved `DB_PATH`, `UPLOAD_DIR`, and `BACKUP_DIR` stay under `/data`, and private database/backup paths are not beneath uploads
+- [ ] Railway and Docker start directly with `node server/server.js`, with `drainingSeconds` set to the string `"15"`
 - [ ] Railway health check is `/api/health` and returns HTTP 200 after a controlled restart
 - [ ] Daily validated SQLite snapshot and weekly Railway Volume backup configured
 - [ ] Served over HTTPS (required for the PWA service worker and HSTS)
