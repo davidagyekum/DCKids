@@ -309,6 +309,10 @@ function _loginShowStep(step) {
         var el = document.getElementById('login-step-' + s);
         if (el) el.style.display = (s === step) ? 'block' : 'none';
     });
+    var recoveryLink = document.querySelector('.login-request-access a[onclick*="showRecoveryLogin"]');
+    if (recoveryLink && recoveryLink.parentElement) {
+        recoveryLink.parentElement.hidden = (step === 'recovery');
+    }
 }
 function _loginError(msg) {
     var el = document.getElementById('login-error');
@@ -431,7 +435,12 @@ function showRecoveryCodes(codes, onContinue) {
     window._lastRecoveryCodes = codes.slice();
     list.innerHTML = codes.map(function (c) { return '<li>' + escapeHtml(c) + '</li>'; }).join('');
     overlay.classList.add('open');
-    if (cont) cont.onclick = function () { overlay.classList.remove('open'); if (onContinue) onContinue(); };
+    if (cont) cont.onclick = function () {
+        overlay.classList.remove('open');
+        window._lastRecoveryCodes = [];
+        list.textContent = '';
+        if (onContinue) onContinue();
+    };
 }
 function copyRecoveryCodes() {
     var codes = window._lastRecoveryCodes || [];
@@ -607,6 +616,7 @@ function showDashboard(role) {
 
     // Load all data
     loadDashboard();
+    loadRecoveryCodeStatus();
 
     // Owner heads-up for pending admin access requests (badge + bell + toast)
     if (typeof refreshAccessRequestsBadge === 'function') refreshAccessRequestsBadge();
@@ -6083,6 +6093,7 @@ document.addEventListener('keydown', function(e) {
 
 function loadSettingsTab() {
     var settings = getSettings();
+    loadRecoveryCodeStatus();
 
     // Refresh the Storefront Configuration card from the server every time the
     // Settings tab opens — otherwise it keeps the values loaded at initial login
@@ -6120,6 +6131,89 @@ function loadSettingsTab() {
 
     // Apply visual state
         else     applyAccentColor(settings.accentColor);
+}
+
+function renderRecoveryCodeStatus(remaining, total) {
+    var status = document.getElementById('recovery-code-status');
+    var count = document.getElementById('recovery-code-remaining');
+    var usable = Math.max(0, Number(remaining) || 0);
+    var available = Math.max(1, Number(total) || 8);
+    if (count) count.textContent = usable + ' / ' + available;
+    if (!status) return;
+    status.removeAttribute('data-tone');
+    if (usable === 0) {
+        status.textContent = 'No unused recovery codes remain. Generate a fresh set now.';
+        status.setAttribute('data-tone', 'danger');
+    } else if (usable <= 2) {
+        status.textContent = 'Only ' + usable + ' recovery code' + (usable === 1 ? '' : 's') + ' remain. Generate a fresh set soon.';
+        status.setAttribute('data-tone', 'warning');
+    } else {
+        status.textContent = usable + ' unused recovery codes remain. Each code works once.';
+    }
+}
+
+async function recoveryAdminRequest(path, options) {
+    var token = localStorage.getItem('adminToken');
+    if (!token) throw new Error('Authentication required');
+    var requestOptions = Object.assign({}, options || {});
+    requestOptions.headers = Object.assign({}, requestOptions.headers || {}, {
+        'Authorization': 'Bearer ' + token,
+        'Content-Type': 'application/json'
+    });
+    var response = await fetch(API_URL + '/admin/recovery-codes' + path, requestOptions);
+    var data;
+    try {
+        data = await response.json();
+    } catch (error) {
+        data = {};
+    }
+    if (response.status === 401 || response.status === 403) {
+        handleSessionExpiry();
+        throw new Error(data.error || 'Your admin session has expired.');
+    }
+    if (!response.ok) throw new Error(data.error || 'Recovery-code request failed.');
+    return data;
+}
+
+async function loadRecoveryCodeStatus() {
+    var status = document.getElementById('recovery-code-status');
+    if (!status || !localStorage.getItem('adminToken')) return;
+    status.textContent = 'Checking unused recovery codes…';
+    status.removeAttribute('data-tone');
+    try {
+        var data = await recoveryAdminRequest('/status', { method: 'GET' });
+        renderRecoveryCodeStatus(data.remaining, data.total);
+    } catch (error) {
+        if (!localStorage.getItem('adminToken')) return;
+        status.textContent = error.message || 'Could not load recovery-code status.';
+        status.setAttribute('data-tone', 'danger');
+    }
+}
+
+async function regenerateRecoveryCodes() {
+    if (!window.confirm('Generate a new set of recovery codes? Every previous recovery code will stop working immediately.')) return;
+    var button = document.getElementById('recovery-code-regenerate-btn');
+    if (button) {
+        button.disabled = true;
+        button.textContent = 'Generating…';
+    }
+    try {
+        var data = await recoveryAdminRequest('/regenerate', { method: 'POST', body: '{}' });
+        if (!Array.isArray(data.recoveryCodes) || data.recoveryCodes.length === 0) {
+            throw new Error('The server did not return the new recovery codes.');
+        }
+        renderRecoveryCodeStatus(data.remaining, data.total);
+        showToast('New recovery codes generated. Previous codes are invalid.', 'success');
+        showRecoveryCodes(data.recoveryCodes, loadRecoveryCodeStatus);
+    } catch (error) {
+        showToast(error.message || 'Could not generate recovery codes.', 'error');
+        await loadRecoveryCodeStatus();
+    } finally {
+        if (button) {
+            button.disabled = false;
+            button.textContent = 'Generate new codes';
+        }
+    }
 }
 
 function saveSettingsForm() {

@@ -9775,6 +9775,45 @@ body.dark-mode .mobile-bottom-nav,
 .settings-account-card__logout:hover { background: rgba(224,72,95,0.06); }
 .dark-mode .settings-account-card { background: #1e1a24; border-color: rgba(255,255,255,0.07); }
 .dark-mode .settings-account-card__logout { background: #1e1a24; }
+
+.settings-recovery-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  margin: 14px 0;
+  padding: 20px;
+  border: 1px solid var(--border-color, #eee8e4);
+  border-radius: 18px;
+  background: var(--card-bg, #fff);
+}
+.settings-recovery-card__copy { display: flex; align-items: flex-start; gap: 14px; min-width: 0; }
+.settings-recovery-card__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 44px;
+  width: 44px;
+  height: 44px;
+  border-radius: 13px;
+  background: rgba(252, 76, 122, 0.11);
+  font-size: 20px;
+}
+.settings-recovery-card h2 { margin: 0; color: var(--text-primary, #1a1a1a); font-size: 17px; line-height: 1.3; }
+.settings-recovery-card p { margin: 5px 0 0; color: var(--text-secondary, #6f686b); font-size: 13px; line-height: 1.5; }
+.settings-recovery-card #recovery-code-status[data-tone="danger"] { color: #b42318; font-weight: 700; }
+.settings-recovery-card #recovery-code-status[data-tone="warning"] { color: #9a6700; font-weight: 700; }
+.settings-recovery-card__warning { font-size: 12px !important; }
+.settings-recovery-card__actions { display: flex; flex-direction: column; align-items: flex-end; gap: 8px; flex: 0 0 auto; }
+.settings-recovery-card__label { color: var(--text-secondary, #6f686b); font-size: 11px; font-weight: 800; letter-spacing: 0.07em; text-transform: uppercase; }
+.settings-recovery-card__actions strong { color: var(--text-primary, #1a1a1a); font-size: 24px; line-height: 1; }
+.settings-recovery-card__actions .btn { min-height: 44px; }
+.dark-mode .settings-recovery-card { background: #1e1a24; border-color: rgba(255,255,255,0.07); }
+@media (max-width: 680px) {
+  .settings-recovery-card { align-items: stretch; flex-direction: column; padding: 18px; }
+  .settings-recovery-card__actions { align-items: stretch; }
+  .settings-recovery-card__actions .btn { width: 100%; }
+}
 @media (max-width: 480px) {
   .settings-account-card { flex-wrap: wrap; }
   .settings-account-card__logout { width: 100%; justify-content: center; }

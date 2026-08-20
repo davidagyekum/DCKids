@@ -5,6 +5,7 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const jwt = require('jsonwebtoken');
 
 const TEST_PORT = 3041;
 const TEST_DB = path.join(__dirname, '_smoketest.db');
@@ -26,6 +27,7 @@ process.env.PAYSTACK_SECRET_KEY = 'paystack-smoke-secret';
 process.env.PAYSTACK_AKUA_WEBHOOK_URL = 'https://akua.example.test/api/payments/paystack/webhook';
 process.env.PAYSTACK_LEGACY_WEBHOOK_URL = 'https://legacy.example.test/paystack';
 process.env.SHOP_NOTIFY_EMAIL = 'shop@test.com';
+process.env.JWT_SECRET = 'smoke-jwt-secret-used-only-by-tests';
 
 let passed = 0;
 let failed = 0;
@@ -224,6 +226,13 @@ async function run() {
         !adminPageSource.includes('New order #1042 received') &&
         !adminSource.includes('function seedDemoDataForPreview()') &&
         adminSource.includes("localStorage.setItem('dcKidsDemoSeedsRetired', 'true')"));
+    check('admin settings exposes accessible recovery-code management',
+        adminPageSource.includes('id="recovery-security-card"') &&
+        adminPageSource.includes('id="recovery-code-status" role="status" aria-live="polite"') &&
+        adminPageSource.includes('id="recovery-code-regenerate-btn"') &&
+        adminSource.includes('async function loadRecoveryCodeStatus()') &&
+        adminSource.includes('async function regenerateRecoveryCodes()') &&
+        adminSource.includes("recoveryLink.parentElement.hidden = (step === 'recovery')"));
     check('mobile product page exposes a synchronized quick-add bar',
         productPageSource.includes('id="productMobileBuybar"') &&
         productStylesSource.includes('.product-mobile-buybar') &&
@@ -359,12 +368,52 @@ async function run() {
     check('image health report includes all safeguards', r.status === 200 && ['missingImages','missingSkus','duplicateSkus','invalidPaths','unusedUploads'].every(k => Array.isArray(health[k])));
 
 
-    // Recovery code is a valid backup sign-in.
+    // Recovery code is a valid backup sign-in, but only one concurrent request
+    // may redeem it. This catches the race where both requests read the unused
+    // row before either asynchronous UPDATE completes.
+    const recoveryAttempts = await Promise.all([
+        fetch(`${BASE}/api/auth/recovery`, json('POST', { email: 'owner@test.com', code: reg.recoveryCodes[0] })),
+        fetch(`${BASE}/api/auth/recovery`, json('POST', { email: 'owner@test.com', code: reg.recoveryCodes[0] }))
+    ]);
+    const recoveryBodies = await Promise.all(recoveryAttempts.map((response) => response.json()));
+    const recoverySuccesses = recoveryAttempts.filter((response) => response.status === 200).length;
+    const recoveryRejections = recoveryAttempts.filter((response) => response.status === 400).length;
+    const rec = recoveryBodies.find((body) => body && body.accessToken) || {};
+    check('recovery code signs in once under concurrent use', recoverySuccesses === 1 && recoveryRejections === 1 && !!rec.accessToken,
+        `statuses ${recoveryAttempts.map((response) => response.status).join(', ')}`);
     r = await fetch(`${BASE}/api/auth/recovery`, json('POST', { email: 'owner@test.com', code: reg.recoveryCodes[0] }));
-    const rec = await r.json();
-    check('recovery code signs in', r.status === 200 && !!rec.accessToken, `status ${r.status}`);
-    r = await fetch(`${BASE}/api/auth/recovery`, json('POST', { email: 'owner@test.com', code: reg.recoveryCodes[0] }));
-    check('recovery code is one-time', r.status === 400, `status ${r.status}`);
+    check('consumed recovery code stays invalid', r.status === 400, `status ${r.status}`);
+
+    r = await fetch(`${BASE}/api/admin/recovery-codes/status`);
+    check('recovery-code status requires admin authentication', r.status === 401, `status ${r.status}`);
+    r = await fetch(`${BASE}/api/admin/recovery-codes/status`, { headers: auth });
+    const recoveryStatus = await r.json();
+    check('authenticated admin sees remaining recovery-code count', r.status === 200 && recoveryStatus.remaining === 7,
+        `status ${r.status}, remaining ${recoveryStatus.remaining}`);
+
+    const loginClaims = jwt.decode(login.accessToken);
+    const staleAdminToken = jwt.sign({
+        id: loginClaims.id,
+        username: loginClaims.username,
+        role: loginClaims.role,
+        iat: Math.floor(Date.now() / 1000) - (31 * 60)
+    }, process.env.JWT_SECRET, { expiresIn: '12h' });
+    r = await fetch(`${BASE}/api/admin/recovery-codes/regenerate`, json('POST', {}, {
+        'Authorization': `Bearer ${staleAdminToken}`
+    }));
+    const staleRegeneration = await r.json();
+    check('recovery-code regeneration requires a recent sign-in', r.status === 401 && staleRegeneration.code === 'reauth_required',
+        `status ${r.status}, code ${staleRegeneration.code}`);
+
+    r = await fetch(`${BASE}/api/admin/recovery-codes/regenerate`, json('POST', {}, auth));
+    const regenerated = await r.json();
+    check('authenticated admin can replace their recovery codes', r.status === 200 && regenerated.remaining === 8 &&
+        Array.isArray(regenerated.recoveryCodes) && regenerated.recoveryCodes.length === 8, `status ${r.status}`);
+    r = await fetch(`${BASE}/api/auth/recovery`, json('POST', { email: 'owner@test.com', code: reg.recoveryCodes[1] }));
+    check('regeneration invalidates every code from the previous set', r.status === 400, `status ${r.status}`);
+    r = await fetch(`${BASE}/api/auth/recovery`, json('POST', { email: 'owner@test.com', code: regenerated.recoveryCodes[0] }));
+    const regeneratedLogin = await r.json();
+    check('a regenerated recovery code signs in once', r.status === 200 && !!regeneratedLogin.accessToken, `status ${r.status}`);
 
     // Unknown email gets a generic answer (no account enumeration).
     r = await fetch(`${BASE}/api/auth/request-code`, json('POST', { email: 'nobody@test.com' }));

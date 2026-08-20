@@ -18,7 +18,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Playfair+Display:wght@500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="admin.css?v=111">
+  <link rel="stylesheet" href="admin.css?v=112">
   <!-- CRITICAL MOBILE FIX — inline so it always loads with the HTML,
        bypasses any stale service-worker or browser CSS cache.
        These rules ensure the sidebar collapses on phones/tablets. -->
@@ -4805,6 +4805,22 @@
               <span>Log out</span>
             </button>
           </div>
+          <section class="settings-recovery-card" id="recovery-security-card" aria-labelledby="recovery-security-title">
+            <div class="settings-recovery-card__copy">
+              <span class="settings-recovery-card__icon" aria-hidden="true">🔐</span>
+              <div>
+                <h2 id="recovery-security-title">Security &amp; recovery codes</h2>
+                <p>Use a one-time code when email or Google sign-in is unavailable.</p>
+                <p id="recovery-code-status" role="status" aria-live="polite" aria-atomic="true">Open Settings to check your unused codes.</p>
+                <p class="settings-recovery-card__warning">Generating a new set permanently invalidates every previous recovery code.</p>
+              </div>
+            </div>
+            <div class="settings-recovery-card__actions">
+              <span class="settings-recovery-card__label">Unused codes</span>
+              <strong id="recovery-code-remaining" aria-hidden="true">— / 8</strong>
+              <button type="button" id="recovery-code-regenerate-btn" class="btn btn-primary" onclick="regenerateRecoveryCodes()">Generate new codes</button>
+            </div>
+          </section>
           <div class="settings-list"><button class="settings-row" type="button" onclick="openModal('modal-settings-store')"><span class="settings-row__ic ic-violet"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l1.5-5h15L21 9"></path><path d="M4 9v10a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1V9"></path><path d="M9 20v-6h6v6"></path></svg></span><span class="settings-row__txt"><span class="settings-row__title">Storefront Configuration</span><span class="settings-row__desc">WhatsApp, wholesale &amp; store notice</span></span><svg class="settings-row__chev" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg></button><button class="settings-row" type="button" onclick="openModal('modal-settings-profile')"><span class="settings-row__ic ic-pink"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg></span><span class="settings-row__txt"><span class="settings-row__title">Profile</span><span class="settings-row__desc">Your display name &amp; phone</span></span><svg class="settings-row__chev" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg></button><button class="settings-row" type="button" onclick="openCategoryManager()"><span class="settings-row__ic ic-violet"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"></path><line x1="7" y1="7" x2="7.01" y2="7"></line></svg></span><span class="settings-row__txt"><span class="settings-row__title">Product Categories</span><span class="settings-row__desc">Add, rename &amp; remove categories</span></span><svg class="settings-row__chev" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg></button><button class="settings-row" type="button" onclick="openModal('modal-settings-notifications')"><span class="settings-row__ic ic-green"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path><path d="M13.73 21a2 2 0 0 1-3.46 0"></path></svg></span><span class="settings-row__txt"><span class="settings-row__title">Notifications</span><span class="settings-row__desc">Choose which alerts you receive</span></span><svg class="settings-row__chev" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg></button></div>
         </div>
 
@@ -6190,7 +6206,7 @@
   <!-- Scripts -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="image-resolver.js?v=1"></script>
-  <script src="admin.js?v=116"></script>
+  <script src="admin.js?v=117"></script>
   <script>
     // Keep the admin page on fresh code: when an updated service worker takes
     // control, reload once (guarded against loops and first-registration).

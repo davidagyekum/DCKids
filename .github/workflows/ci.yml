@@ -24,7 +24,7 @@ jobs:
 
       - name: Syntax check (every shipped JS file)
         run: |
-          for f in app.js admin.js gradient.js service-worker.js server/server.js server/db.js server/backup_db.js server/test_smoke.js; do
+          for f in app.js admin.js gradient.js service-worker.js server/server.js server/db.js server/recovery_codes.js server/backup_db.js server/test_recovery_codes.js server/test_smoke.js; do
             node -c "$f"
           done
 

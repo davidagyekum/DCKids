@@ -7,6 +7,12 @@ const jwt = require('jsonwebtoken');
 const { initializeApp: initializeFirebaseAdmin, applicationDefault, cert, getApps: getFirebaseApps } = require('firebase-admin/app');
 const { getAuth: getFirebaseAuth } = require('firebase-admin/auth');
 const db = require('./db');
+const {
+    DEFAULT_RECOVERY_CODE_COUNT,
+    replaceRecoveryCodes,
+    consumeRecoveryCode,
+    countUnusedRecoveryCodes
+} = require('./recovery_codes');
 
 const app = express();
 app.set('trust proxy', 1); // accurate req.ip behind a reverse proxy (nginx/render/etc.)
@@ -233,25 +239,23 @@ function escapeHtmlServer(s) {
 function genOtp() {
     return String(crypto.randomInt(0, 1000000)).padStart(6, '0');
 }
-function genRecoveryPlain() {
-    const raw = crypto.randomBytes(5).toString('hex').toUpperCase(); // 10 hex chars
-    return raw.slice(0, 5) + '-' + raw.slice(5);
+function runAuthDb(sql, params = []) {
+    return new Promise((resolve, reject) => {
+        db.run(sql, params, function (error) {
+            if (error) reject(error);
+            else resolve(this);
+        });
+    });
 }
 // Generate N fresh recovery codes for a user, store them hashed, return the
 // plaintext once (the only time they exist unhashed).
-async function generateRecoveryCodes(userId, n = 8) {
-    return new Promise((resolve) => {
-        db.run(`DELETE FROM recovery_codes WHERE user_id = ?`, [userId], async () => {
-            const codes = [];
-            for (let i = 0; i < n; i++) {
-                const c = genRecoveryPlain();
-                codes.push(c);
-                const h = await bcrypt.hash(c, 10);
-                db.run(`INSERT INTO recovery_codes (user_id, code_hash) VALUES (?, ?)`, [userId, h]);
-            }
-            resolve(codes);
-        });
-    });
+async function generateRecoveryCodes(userId, n = DEFAULT_RECOVERY_CODE_COUNT) {
+    return replaceRecoveryCodes({ db, bcrypt, userId, count: n });
+}
+async function generateInitialRecoveryCodes(userId, n = DEFAULT_RECOVERY_CODE_COUNT) {
+    const recoveryCodes = await generateRecoveryCodes(userId, n);
+    await runAuthDb('UPDATE users SET recovery_shown = 1 WHERE id = ?', [userId]);
+    return recoveryCodes;
 }
 function notifyManagersOfRequest(name, mail) {
     db.all(`SELECT email FROM users WHERE role = 'manager' AND status = 'active' AND email IS NOT NULL`, [], (e, rows) => {
@@ -376,6 +380,7 @@ const loginLimiter    = makeAttemptLimiter(10, 15 * 60 * 1000, 'Too many login a
 const registerLimiter = makeAttemptLimiter(5, 60 * 60 * 1000, 'Too many registration attempts. Try again later.');
 const trackLimiter    = makeAttemptLimiter(30, 15 * 60 * 1000, 'Too many tracking lookups. Try again shortly.');
 const reviewLimiter   = makeAttemptLimiter(10, 60 * 60 * 1000, 'Too many reviews submitted. Try again later.');
+const recoveryManageLimiter = makeAttemptLimiter(5, 60 * 60 * 1000, 'Too many recovery-code changes. Try again later.');
 
 // JWT Middleware
 const authenticateToken = (req, res, next) => {
@@ -399,7 +404,7 @@ const authenticateToken = (req, res, next) => {
             if (!user || (user.status && user.status !== 'active')) {
                 return res.status(403).json({ error: 'This account is no longer active' });
             }
-            req.user = { id: user.id, username: user.username, role: user.role };
+            req.user = { id: user.id, username: user.username, role: user.role, issuedAt: Number(payload.iat) };
             next();
         });
     });
@@ -411,6 +416,45 @@ const requireManager = (req, res, next) => {
     }
     next();
 };
+
+const requireRecentAuthentication = (req, res, next) => {
+    const issuedAt = Number(req.user && req.user.issuedAt);
+    const ageSeconds = Math.floor(Date.now() / 1000) - issuedAt;
+    if (!Number.isFinite(issuedAt) || ageSeconds < 0 || ageSeconds > 30 * 60) {
+        return res.status(401).json({
+            error: 'For your security, sign in again before generating new recovery codes.',
+            code: 'reauth_required'
+        });
+    }
+    next();
+};
+
+app.get('/api/admin/recovery-codes/status', authenticateToken, async (req, res) => {
+    res.setHeader('Cache-Control', 'private, no-store, max-age=0');
+    try {
+        const remaining = await countUnusedRecoveryCodes({ db, userId: req.user.id });
+        return res.json({ remaining, total: DEFAULT_RECOVERY_CODE_COUNT });
+    } catch (error) {
+        return serverError(res, error);
+    }
+});
+
+app.post('/api/admin/recovery-codes/regenerate', authenticateToken, requireRecentAuthentication, recoveryManageLimiter, async (req, res) => {
+    res.setHeader('Cache-Control', 'private, no-store, max-age=0');
+    try {
+        const recoveryCodes = await generateRecoveryCodes(req.user.id);
+        logAdminAction(req, 'regenerate_recovery_codes', 'security', req.user.id, 'Regenerated personal recovery codes');
+        return res.json({
+            success: true,
+            remaining: recoveryCodes.length,
+            total: recoveryCodes.length,
+            recoveryCodes,
+            message: 'New recovery codes generated. Previous codes are no longer valid.'
+        });
+    } catch (error) {
+        return serverError(res, error);
+    }
+});
 
 // ---------------- AUTH ROUTES (passwordless: email OTP + recovery) ---------------- //
 
@@ -446,15 +490,18 @@ app.post('/api/admin/register', registerLimiter, (req, res) => {
                 }
                 const userId = this.lastID;
                 if (isOwner) {
-                    const recoveryCodes = await generateRecoveryCodes(userId);
-                    db.run(`UPDATE users SET recovery_shown = 1 WHERE id = ?`, [userId]);
-                    sendEmail(mail, 'Your DC Kids admin account is ready',
-                        `<p>Hi ${escapeHtmlServer(name)}, your owner account is active.</p><p>Sign in at <a href="${APP_URL}/admin.html">${APP_URL}/admin.html</a> — we'll email you a 6-digit code each time.</p>`);
-                    return res.status(201).json({
-                        success: true, owner: true,
-                        message: 'Your owner account is active. Save your recovery codes below, then sign in with an email code.',
-                        recoveryCodes
-                    });
+                    try {
+                        const recoveryCodes = await generateInitialRecoveryCodes(userId);
+                        sendEmail(mail, 'Your DC Kids admin account is ready',
+                            `<p>Hi ${escapeHtmlServer(name)}, your owner account is active.</p><p>Sign in at <a href="${APP_URL}/admin.html">${APP_URL}/admin.html</a> — we'll email you a 6-digit code each time.</p>`);
+                        return res.status(201).json({
+                            success: true, owner: true,
+                            message: 'Your owner account is active. Save your recovery codes below, then sign in with an email code.',
+                            recoveryCodes
+                        });
+                    } catch (error) {
+                        return serverError(res, error);
+                    }
                 }
                 sendEmail(mail, 'DC Kids admin access requested',
                     `<p>Hi ${escapeHtmlServer(name)}, we received your request for admin access.</p><p>A manager will review it, and you'll be able to sign in once you're approved.</p>`);
@@ -535,8 +582,11 @@ app.post('/api/auth/verify-code', loginLimiter, (req, res) => {
             const accessToken = jwt.sign({ id: row.id, username: row.email, role: row.role }, JWT_SECRET, { expiresIn: '12h' });
             let recoveryCodes = null;
             if (!row.recovery_shown) {
-                recoveryCodes = await generateRecoveryCodes(row.id);
-                db.run(`UPDATE users SET recovery_shown = 1 WHERE id = ?`, [row.id]);
+                try {
+                    recoveryCodes = await generateInitialRecoveryCodes(row.id);
+                } catch (error) {
+                    return serverError(res, error);
+                }
             }
             res.json({ accessToken, role: row.role, recoveryCodes });
         }
@@ -546,22 +596,19 @@ app.post('/api/auth/verify-code', loginLimiter, (req, res) => {
 // Backup sign-in with a one-time recovery code (if email is unavailable).
 app.post('/api/auth/recovery', loginLimiter, (req, res) => {
     const mail = String((req.body && req.body.email) || '').trim().toLowerCase();
-    const rc = String((req.body && req.body.code) || '').trim().toUpperCase().replace(/\s+/g, '');
+    const rc = String((req.body && req.body.code) || '');
     if (!mail || !rc) return res.status(400).json({ error: 'Enter your email and a recovery code.' });
-    db.get(`SELECT * FROM users WHERE email = ? AND status = 'active'`, [mail], (err, user) => {
+    db.get(`SELECT * FROM users WHERE email = ? AND status = 'active'`, [mail], async (err, user) => {
         if (err) return serverError(res, err);
         if (!user) return res.status(400).json({ error: 'Invalid email or recovery code.' });
-        db.all(`SELECT id, code_hash FROM recovery_codes WHERE user_id = ? AND used_at IS NULL`, [user.id], async (e2, rows) => {
-            if (e2) return serverError(res, e2);
-            for (const r of (rows || [])) {
-                if (await bcrypt.compare(rc, r.code_hash)) {
-                    db.run(`UPDATE recovery_codes SET used_at = datetime('now') WHERE id = ?`, [r.id]);
-                    const accessToken = jwt.sign({ id: user.id, username: user.email, role: user.role }, JWT_SECRET, { expiresIn: '12h' });
-                    return res.json({ accessToken, role: user.role });
-                }
-            }
-            res.status(400).json({ error: 'Invalid email or recovery code.' });
-        });
+        try {
+            const consumed = await consumeRecoveryCode({ db, bcrypt, userId: user.id, code: rc });
+            if (!consumed) return res.status(400).json({ error: 'Invalid email or recovery code.' });
+            const accessToken = jwt.sign({ id: user.id, username: user.email, role: user.role }, JWT_SECRET, { expiresIn: '12h' });
+            return res.json({ accessToken, role: user.role });
+        } catch (error) {
+            return serverError(res, error);
+        }
     });
 });
 
@@ -605,10 +652,13 @@ app.post('/api/auth/google', loginLimiter, async (req, res) => {
                     if (e2) return serverError(res, e2);
                     const userId = this.lastID;
                     if (isOwner) {
-                        const recoveryCodes = await generateRecoveryCodes(userId);
-                        db.run(`UPDATE users SET recovery_shown = 1 WHERE id = ?`, [userId]);
-                        const accessToken = jwt.sign({ id: userId, username: mail, role }, JWT_SECRET, { expiresIn: '12h' });
-                        return res.json({ accessToken, role, recoveryCodes });
+                        try {
+                            const recoveryCodes = await generateInitialRecoveryCodes(userId);
+                            const accessToken = jwt.sign({ id: userId, username: mail, role }, JWT_SECRET, { expiresIn: '12h' });
+                            return res.json({ accessToken, role, recoveryCodes });
+                        } catch (error) {
+                            return serverError(res, error);
+                        }
                     }
                     notifyManagersOfRequest(name, mail);
                     return res.status(403).json({ error: 'Access requested — an owner needs to approve your account before you can sign in.' });
@@ -644,8 +694,11 @@ app.post('/api/auth/google', loginLimiter, async (req, res) => {
 
         let recoveryCodes = null;
         if (!user.recovery_shown) {
-            recoveryCodes = await generateRecoveryCodes(user.id);
-            db.run(`UPDATE users SET recovery_shown = 1 WHERE id = ?`, [user.id]);
+            try {
+                recoveryCodes = await generateInitialRecoveryCodes(user.id);
+            } catch (error) {
+                return serverError(res, error);
+            }
         }
         const accessToken = jwt.sign({ id: user.id, username: user.email, role: user.role }, JWT_SECRET, { expiresIn: '12h' });
         res.json({ accessToken, role: user.role, recoveryCodes });
