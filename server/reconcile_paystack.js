@@ -31,6 +31,45 @@ function parseArguments(argv) {
     return options;
 }
 
+function pathIdentity(value) {
+    const resolved = path.resolve(value);
+    return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+}
+
+function assertExistingParentHasNoLinks(reportPath) {
+    const parentPath = path.dirname(reportPath);
+    const parsed = path.parse(parentPath);
+    let currentPath = parsed.root;
+    const segments = parentPath.slice(parsed.root.length).split(path.sep).filter(Boolean);
+    for (const segment of segments) {
+        currentPath = path.join(currentPath, segment);
+        const details = fs.lstatSync(currentPath);
+        if (details.isSymbolicLink()) throw new Error('Report parent cannot contain a symbolic link or junction');
+    }
+    if (!fs.statSync(parentPath).isDirectory()) throw new Error('Report parent must be an existing directory');
+    return fs.realpathSync.native(parentPath);
+}
+
+function validateReportDestination(reportPath, inputPath, databasePath) {
+    const reportIdentity = pathIdentity(reportPath);
+    if (reportIdentity === pathIdentity(inputPath)) throw new Error('Report destination conflicts with the input export');
+    if (reportIdentity === pathIdentity(databasePath)) throw new Error('Report destination conflicts with the database');
+
+    try {
+        fs.lstatSync(reportPath);
+        throw new Error('Report destination already exists');
+    } catch (error) {
+        if (error.code !== 'ENOENT') throw error;
+    }
+
+    const physicalParent = assertExistingParentHasNoLinks(reportPath);
+    const physicalReport = pathIdentity(path.join(physicalParent, path.basename(reportPath)));
+    const physicalInput = pathIdentity(fs.realpathSync.native(inputPath));
+    const physicalDatabase = pathIdentity(fs.realpathSync.native(databasePath));
+    if (physicalReport === physicalInput) throw new Error('Report destination aliases the input export');
+    if (physicalReport === physicalDatabase) throw new Error('Report destination aliases the database');
+}
+
 function openDatabase(filename, apply) {
     const mode = apply ? sqlite3.OPEN_READWRITE : sqlite3.OPEN_READONLY;
     return new Promise((resolve, reject) => {
@@ -57,10 +96,19 @@ function dbRun(database, sql, params = []) {
     }));
 }
 
-function safeText(value, maximumLength) {
-    if (value == null) return null;
-    const normalized = String(value).trim();
-    return normalized && normalized.length <= maximumLength ? normalized : null;
+function isPlainObject(value) {
+    return value !== null && typeof value === 'object' && !Array.isArray(value) &&
+        Object.getPrototypeOf(value) === Object.prototype;
+}
+
+function optionalString(object, property, maximumLength, pattern) {
+    if (!Object.prototype.hasOwnProperty.call(object, property)) return { valid: true, value: null };
+    if (typeof object[property] !== 'string') return { valid: false, value: null };
+    const value = object[property].trim();
+    if (!value || value.length > maximumLength || (pattern && !pattern.test(value))) {
+        return { valid: false, value: null };
+    }
+    return { valid: true, value };
 }
 
 function maskEmail(email) {
@@ -71,8 +119,9 @@ function maskEmail(email) {
 }
 
 function normalizeEmail(value) {
-    const email = safeText(value, 254);
-    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return null;
+    if (typeof value !== 'string') return null;
+    const email = value.trim();
+    if (!email || email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return null;
     return email.toLowerCase();
 }
 
@@ -81,49 +130,74 @@ function reject(reason) {
 }
 
 function normalizeTransaction(record) {
-    if (!record || typeof record !== 'object' || Array.isArray(record)) return reject('malformed_record');
-    if (String(record.status || '').toLowerCase() !== 'success') return reject('not_successful');
-    if (String(record.currency || '').toUpperCase() !== 'GHS') return reject('unsupported_currency');
+    if (!isPlainObject(record)) return reject('malformed_record');
+    if (typeof record.status !== 'string' || record.status.length > 32 ||
+        record.status.trim().toLowerCase() !== 'success') return reject('not_successful');
+    if (typeof record.currency !== 'string' || record.currency.length > 8 ||
+        record.currency.trim().toUpperCase() !== 'GHS') return reject('unsupported_currency');
+    if (typeof record.reference !== 'string' || record.reference !== record.reference.trim() ||
+        !REFERENCE_PATTERN.test(record.reference)) return reject('invalid_reference');
+    if (typeof record.amount !== 'number' || !Number.isSafeInteger(record.amount) || record.amount <= 0) {
+        return reject('invalid_amount');
+    }
 
-    const reference = safeText(record.reference, 130);
-    if (!reference || !REFERENCE_PATTERN.test(reference)) return reject('invalid_reference');
-    if (!Number.isSafeInteger(Number(record.amount)) || Number(record.amount) <= 0) return reject('invalid_amount');
+    let transactionId;
+    if (typeof record.id === 'number' && Number.isSafeInteger(record.id) && record.id > 0) {
+        transactionId = String(record.id);
+    } else if (typeof record.id === 'string' && /^[0-9]{1,128}$/.test(record.id)) {
+        transactionId = record.id;
+    } else {
+        return reject('missing_transaction_id');
+    }
 
-    const transactionId = safeText(record.id, 128);
-    if (!transactionId) return reject('missing_transaction_id');
-    const paidAt = safeText(record.paid_at || record.paidAt, 64);
-    if (!paidAt || Number.isNaN(Date.parse(paidAt))) return reject('invalid_paid_timestamp');
+    const paidAtValue = Object.prototype.hasOwnProperty.call(record, 'paid_at') ? record.paid_at : record.paidAt;
+    const timestampPattern = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})$/;
+    if (typeof paidAtValue !== 'string' || paidAtValue.length > 64 ||
+        !timestampPattern.test(paidAtValue) || Number.isNaN(Date.parse(paidAtValue))) {
+        return reject('invalid_paid_timestamp');
+    }
+    const paidAt = paidAtValue;
 
-    const metadata = record.metadata == null ? {} : record.metadata;
-    if (typeof metadata !== 'object' || Array.isArray(metadata)) return reject('incompatible_source');
-    const sourceApp = safeText(metadata.source_app, 64);
-    if (sourceApp && sourceApp.toLowerCase() !== 'dckids') return reject('incompatible_source');
-
-    const customer = record.customer && typeof record.customer === 'object' && !Array.isArray(record.customer)
-        ? record.customer
-        : {};
-    const firstName = safeText(customer.first_name, 100);
-    const lastName = safeText(customer.last_name, 100);
-    const combinedName = [firstName, lastName].filter(Boolean).join(' ');
-    const customerName = safeText(combinedName || customer.name, 200);
-    const customerPhone = safeText(customer.phone, 50);
-    const customerEmail = normalizeEmail(customer.email);
-    const metadataOrderNumber = safeText(metadata.order_number, 100);
+    if (!isPlainObject(record.metadata)) return reject('malformed_metadata');
+    if (!isPlainObject(record.customer)) return reject('malformed_customer');
+    const metadata = record.metadata;
+    const customer = record.customer;
+    const sourceApp = optionalString(metadata, 'source_app', 64, /^[A-Za-z0-9_-]+$/);
+    if (!sourceApp.valid || (sourceApp.value && sourceApp.value.toLowerCase() !== 'dckids')) {
+        return reject('incompatible_source');
+    }
+    const metadataOrderNumber = optionalString(metadata, 'order_number', 100, ORDER_NUMBER_PATTERN);
+    if (!metadataOrderNumber.valid) return reject('invalid_order_number');
+    const channel = optionalString(record, 'channel', 64, /^[A-Za-z0-9_-]+$/);
+    if (!channel.valid) return reject('invalid_channel');
+    const firstName = optionalString(customer, 'first_name', 100);
+    const lastName = optionalString(customer, 'last_name', 100);
+    const fallbackName = optionalString(customer, 'name', 200);
+    const phone = optionalString(customer, 'phone', 50);
+    if (!firstName.valid || !lastName.valid || !fallbackName.valid || !phone.valid) {
+        return reject('malformed_customer');
+    }
+    let customerEmail = null;
+    if (Object.prototype.hasOwnProperty.call(customer, 'email')) {
+        customerEmail = normalizeEmail(customer.email);
+        if (!customerEmail) return reject('malformed_customer');
+    }
+    const combinedName = [firstName.value, lastName.value].filter(Boolean).join(' ');
+    const customerName = combinedName || fallbackName.value;
+    if (customerName && customerName.length > 200) return reject('malformed_customer');
 
     return {
         valid: true,
-        reference,
+        reference: record.reference,
         transactionId,
-        amount: Number(record.amount) / 100,
+        amount: record.amount / 100,
         currency: 'GHS',
-        channel: safeText(record.channel, 64),
+        channel: channel.value,
         paidAt,
         customerName,
-        customerPhone,
+        customerPhone: phone.value,
         customerEmail,
-        metadataOrderNumber: metadataOrderNumber && ORDER_NUMBER_PATTERN.test(metadataOrderNumber)
-            ? metadataOrderNumber
-            : null
+        metadataOrderNumber: metadataOrderNumber.value
     };
 }
 
@@ -295,19 +369,23 @@ function readExport(inputPath) {
 
 async function main() {
     const options = parseArguments(process.argv.slice(2));
+    validateReportDestination(options.reportPath, options.inputPath, DB_PATH);
     const records = readExport(options.inputPath);
-    const database = await openDatabase(DB_PATH, options.apply);
-    let result;
+    const reportFile = fs.openSync(options.reportPath, 'wx', 0o600);
+    let database;
     try {
-        result = await reconcile(database, records, options.apply);
-    } finally {
+        database = await openDatabase(DB_PATH, options.apply);
+        const result = await reconcile(database, records, options.apply);
         await closeDatabase(database);
+        database = null;
+        fs.writeFileSync(reportFile, `${JSON.stringify(result.report, null, 2)}\n`, { encoding: 'utf8' });
+        process.stdout.write(`Reconciliation ${result.report.mode}: ${result.report.summary.restored} restored, ` +
+            `${result.report.summary.alreadyPresent} already present, ${result.report.summary.rejected} rejected.\n`);
+        if (result.hardFailure) process.exitCode = 1;
+    } finally {
+        if (database) await closeDatabase(database);
+        fs.closeSync(reportFile);
     }
-    fs.mkdirSync(path.dirname(options.reportPath), { recursive: true });
-    fs.writeFileSync(options.reportPath, `${JSON.stringify(result.report, null, 2)}\n`, { mode: 0o600 });
-    process.stdout.write(`Reconciliation ${result.report.mode}: ${result.report.summary.restored} restored, ` +
-        `${result.report.summary.alreadyPresent} already present, ${result.report.summary.rejected} rejected.\n`);
-    if (result.hardFailure) process.exitCode = 1;
 }
 
 main().catch((error) => {

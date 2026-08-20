@@ -109,7 +109,7 @@ async function createSchema(dbPath) {
     return db;
 }
 
-function executeCli(dbPath, inputPath, reportPath, extraArgs = []) {
+function executeCli(dbPath, inputPath, reportPath, extraArgs = [], environment = {}) {
     return spawnSync(process.execPath, [cliPath, '--input', inputPath, '--report', reportPath, ...extraArgs], {
         env: Object.assign({}, process.env, {
             NODE_ENV: 'test',
@@ -120,7 +120,7 @@ function executeCli(dbPath, inputPath, reportPath, extraArgs = []) {
             DB_PATH: dbPath,
             BACKUP_DIR: path.join(tempRoot, 'backups'),
             UPLOAD_DIR: path.join(tempRoot, 'uploads')
-        }),
+        }, environment),
         encoding: 'utf8'
     });
 }
@@ -154,7 +154,9 @@ function successfulTransaction(overrides = {}) {
 async function runTests() {
     const dbPath = path.join(tempRoot, 'main', 'inventory.db');
     const inputPath = path.join(tempRoot, 'paystack.json');
-    const reportPath = path.join(tempRoot, 'report.json');
+    const dryReportPath = path.join(tempRoot, 'dry-report.json');
+    const applyReportPath = path.join(tempRoot, 'apply-report.json');
+    const replayReportPath = path.join(tempRoot, 'replay-report.json');
     let db = await createSchema(dbPath);
     await run(db, "INSERT INTO products (name, stock) VALUES ('Keep Stock', 17)");
     const account = await run(db, "INSERT INTO customer_accounts (email, name) VALUES ('alice@example.com', 'Account Alice')");
@@ -188,10 +190,10 @@ async function runTests() {
     ];
     fs.writeFileSync(inputPath, JSON.stringify(exportRows));
 
-    const dryRun = executeCli(dbPath, inputPath, reportPath);
+    const dryRun = executeCli(dbPath, inputPath, dryReportPath);
     await check('CLI defaults to dry-run and accepts an array export', () => {
         assert.strictEqual(dryRun.status, 0, dryRun.stderr);
-        const report = JSON.parse(fs.readFileSync(reportPath, 'utf8'));
+        const report = JSON.parse(fs.readFileSync(dryReportPath, 'utf8'));
         assert.strictEqual(report.mode, 'dry-run');
         assert.strictEqual(report.summary.wouldRestore, 2);
         assert.strictEqual(report.summary.restored, 0);
@@ -209,7 +211,7 @@ async function runTests() {
     });
     await close(db);
 
-    const dryReportText = fs.readFileSync(reportPath, 'utf8');
+    const dryReportText = fs.readFileSync(dryReportPath, 'utf8');
     await check('dry-run report masks email and excludes raw PII and gateway data', () => {
         assert.match(dryReportText, /a\*\*\*@example\.com/);
         ['alice@example.com', 'Alice', 'Recovery', '+233 24 111 2222', 'Sensitive Street',
@@ -219,16 +221,16 @@ async function runTests() {
     });
 
     fs.writeFileSync(inputPath, JSON.stringify({ data: exportRows }));
-    const missingAttestation = executeCli(dbPath, inputPath, reportPath, ['--apply']);
+    const missingAttestation = executeCli(dbPath, inputPath, applyReportPath, ['--apply']);
     await check('apply requires verified-export and backup attestations', () => {
         assert.notStrictEqual(missingAttestation.status, 0);
         assert.match(missingAttestation.stderr, /verified.*export.*backup/i);
     });
 
-    const applied = executeCli(dbPath, inputPath, reportPath, ['--apply', '--verified-export', '--backup-confirmed']);
+    const applied = executeCli(dbPath, inputPath, applyReportPath, ['--apply', '--verified-export', '--backup-confirmed']);
     await check('apply accepts a data-wrapped export and restores valid missing payments', () => {
         assert.strictEqual(applied.status, 0, applied.stderr);
-        const report = JSON.parse(fs.readFileSync(reportPath, 'utf8'));
+        const report = JSON.parse(fs.readFileSync(applyReportPath, 'utf8'));
         assert.strictEqual(report.mode, 'apply');
         assert.strictEqual(report.restored.length, 2);
         assert.ok(report.restored.every((entry) => entry.status === 'restored'));
@@ -275,7 +277,7 @@ async function runTests() {
     });
     await close(db);
 
-    const appliedReportText = fs.readFileSync(reportPath, 'utf8');
+    const appliedReportText = fs.readFileSync(applyReportPath, 'utf8');
     await check('apply report masks identity and never serializes input payloads or metadata', () => {
         assert.match(appliedReportText, /a\*\*\*@example\.com/);
         ['alice@example.com', 'Alice Recovery', '+233 24 111 2222', 'Sensitive Street',
@@ -284,10 +286,10 @@ async function runTests() {
         });
     });
 
-    const replay = executeCli(dbPath, inputPath, reportPath, ['--apply', '--verified-export', '--backup-confirmed']);
+    const replay = executeCli(dbPath, inputPath, replayReportPath, ['--apply', '--verified-export', '--backup-confirmed']);
     await check('replay is idempotent through provider references', () => {
         assert.strictEqual(replay.status, 0, replay.stderr);
-        const report = JSON.parse(fs.readFileSync(reportPath, 'utf8'));
+        const report = JSON.parse(fs.readFileSync(replayReportPath, 'utf8'));
         assert.strictEqual(report.summary.restored, 0);
         assert.strictEqual(report.summary.alreadyPresent, 3);
         assert.strictEqual(report.summary.incompleteReview, 0);
@@ -298,6 +300,204 @@ async function runTests() {
         assert.strictEqual((await get(db, 'SELECT COUNT(*) AS count FROM payments')).count, 3);
     });
     await close(db);
+
+    const existingReportBytes = fs.readFileSync(dryReportPath);
+    const existingReportResult = executeCli(dbPath, inputPath, dryReportPath);
+    await check('an existing report is rejected and never overwritten', () => {
+        assert.notStrictEqual(existingReportResult.status, 0);
+        assert.deepStrictEqual(fs.readFileSync(dryReportPath), existingReportBytes);
+    });
+
+    async function createPathGuardFixture(label) {
+        const root = path.join(tempRoot, `path-guard-${label}`);
+        const guardedDbPath = path.join(root, 'database', 'inventory.db');
+        const guardedInputPath = path.join(root, 'export.json');
+        const guardedDb = await createSchema(guardedDbPath);
+        await close(guardedDb);
+        fs.writeFileSync(guardedInputPath, JSON.stringify([successfulTransaction({
+            id: `8${label.length}01`,
+            reference: `DCK-GUARD-${label.toUpperCase().replace(/[^A-Z0-9]/g, '-')}`
+        })]));
+        return { root, guardedDbPath, guardedInputPath };
+    }
+
+    const exact = await createPathGuardFixture('exact');
+    const exactDbBytes = fs.readFileSync(exact.guardedDbPath);
+    const exactResult = executeCli(exact.guardedDbPath, exact.guardedInputPath, exact.guardedDbPath);
+    await check('report path equal to DB_PATH is rejected without changing the database', () => {
+        assert.notStrictEqual(exactResult.status, 0);
+        assert.deepStrictEqual(fs.readFileSync(exact.guardedDbPath), exactDbBytes);
+    });
+
+    const inputCollision = await createPathGuardFixture('input');
+    const inputBytes = fs.readFileSync(inputCollision.guardedInputPath);
+    const inputCollisionResult = executeCli(
+        inputCollision.guardedDbPath, inputCollision.guardedInputPath, inputCollision.guardedInputPath);
+    await check('report path equal to the input export is rejected without changing the export', () => {
+        assert.notStrictEqual(inputCollisionResult.status, 0);
+        assert.deepStrictEqual(fs.readFileSync(inputCollision.guardedInputPath), inputBytes);
+    });
+
+    const linkedParent = await createPathGuardFixture('linked-parent');
+    const junctionPath = path.join(linkedParent.root, 'database-alias');
+    fs.symlinkSync(path.dirname(linkedParent.guardedDbPath), junctionPath, 'junction');
+    const linkedParentDbBytes = fs.readFileSync(linkedParent.guardedDbPath);
+    const linkedParentResult = executeCli(linkedParent.guardedDbPath, linkedParent.guardedInputPath,
+        path.join(junctionPath, path.basename(linkedParent.guardedDbPath)));
+    await check('report through a symlink or junction parent is rejected without changing the database', () => {
+        assert.notStrictEqual(linkedParentResult.status, 0);
+        assert.deepStrictEqual(fs.readFileSync(linkedParent.guardedDbPath), linkedParentDbBytes);
+    });
+
+    const symlinkOutput = await createPathGuardFixture('symlink-output');
+    const symlinkTarget = path.join(symlinkOutput.root, 'protected.json');
+    const symlinkReport = path.join(symlinkOutput.root, 'report-link.json');
+    fs.writeFileSync(symlinkTarget, 'protected symlink target');
+    fs.symlinkSync(symlinkTarget, symlinkReport, 'file');
+    const symlinkResult = executeCli(symlinkOutput.guardedDbPath, symlinkOutput.guardedInputPath, symlinkReport);
+    await check('symlink report output is rejected without changing its target', () => {
+        assert.notStrictEqual(symlinkResult.status, 0);
+        assert.strictEqual(fs.readFileSync(symlinkTarget, 'utf8'), 'protected symlink target');
+    });
+
+    const hardlink = await createPathGuardFixture('hardlink');
+    const hardlinkReport = path.join(hardlink.root, 'database-hardlink.db');
+    fs.linkSync(hardlink.guardedDbPath, hardlinkReport);
+    const hardlinkDbBytes = fs.readFileSync(hardlink.guardedDbPath);
+    const hardlinkResult = executeCli(hardlink.guardedDbPath, hardlink.guardedInputPath, hardlinkReport);
+    await check('hard-link report alias is rejected without changing the database', () => {
+        assert.notStrictEqual(hardlinkResult.status, 0);
+        assert.deepStrictEqual(fs.readFileSync(hardlink.guardedDbPath), hardlinkDbBytes);
+    });
+
+    const missingParent = await createPathGuardFixture('missing-parent');
+    const missingReportParent = path.join(missingParent.root, 'not-created');
+    const missingParentResult = executeCli(missingParent.guardedDbPath, missingParent.guardedInputPath,
+        path.join(missingReportParent, 'report.json'));
+    await check('report parent must already exist and is never created by the CLI', () => {
+        assert.notStrictEqual(missingParentResult.status, 0);
+        assert.ok(!fs.existsSync(missingReportParent));
+    });
+
+    const sideEffectDbPath = path.join(tempRoot, 'side-effects', 'database', 'inventory.db');
+    db = await createSchema(sideEffectDbPath);
+    await close(db);
+    const sideEffectInput = path.join(tempRoot, 'side-effects', 'export.json');
+    const sideEffectReportDir = path.join(tempRoot, 'side-effects', 'reports');
+    const missingUploads = path.join(tempRoot, 'side-effects', 'durable', 'uploads');
+    const missingBackups = path.join(tempRoot, 'side-effects', 'durable', 'backups');
+    fs.writeFileSync(sideEffectInput, JSON.stringify([successfulTransaction({
+        id: 8901,
+        reference: 'DCK-SIDE-EFFECTS'
+    })]));
+    fs.mkdirSync(sideEffectReportDir, { recursive: true });
+    const sideEffectResult = executeCli(sideEffectDbPath, sideEffectInput,
+        path.join(sideEffectReportDir, 'report.json'), [], {
+            UPLOAD_DIR: missingUploads,
+            BACKUP_DIR: missingBackups
+        });
+    await check('dry-run creates only its report and no configured durable directories', () => {
+        assert.strictEqual(sideEffectResult.status, 0, sideEffectResult.stderr);
+        assert.ok(!fs.existsSync(missingUploads));
+        assert.ok(!fs.existsSync(missingBackups));
+        assert.ok(fs.existsSync(path.join(sideEffectReportDir, 'report.json')));
+    });
+
+    const adversarialDbPath = path.join(tempRoot, 'adversarial', 'inventory.db');
+    db = await createSchema(adversarialDbPath);
+    await close(db);
+    const adversarialInput = path.join(tempRoot, 'adversarial', 'export.json');
+    const adversarialReport = path.join(tempRoot, 'adversarial', 'report.json');
+    const adversarialRows = [
+        [],
+        successfulTransaction({ id: 9001, reference: 'DCK-TYPE-STATUS', status: ['success'] }),
+        successfulTransaction({ id: 9002, reference: 'DCK-TYPE-CURRENCY', currency: ['GHS'] }),
+        successfulTransaction({ id: 9003, reference: 'DCK-TYPE-AMOUNT-STRING', amount: '12345' }),
+        successfulTransaction({ id: 9004, reference: 'DCK-TYPE-AMOUNT-BOOL', amount: true }),
+        successfulTransaction({ id: 9005, reference: ['DCK-TYPE-REFERENCE'] }),
+        successfulTransaction({ id: { secret: 'transaction-object-secret' }, reference: 'DCK-TYPE-ID-OBJECT' }),
+        successfulTransaction({ id: '9e3', reference: 'DCK-TYPE-ID-FORMAT' }),
+        successfulTransaction({ id: 9008, reference: 'DCK-TYPE-TIMESTAMP', paid_at: '0' }),
+        successfulTransaction({ id: 9009, reference: 'DCK-TYPE-METADATA', metadata: null }),
+        successfulTransaction({ id: 9010, reference: 'DCK-TYPE-CUSTOMER', customer: ['private-customer-array'] }),
+        successfulTransaction({
+            id: 9011,
+            reference: 'DCK-TYPE-SOURCE',
+            metadata: { source_app: ['dckids'], order_number: 'ORD-TYPE-SOURCE' }
+        }),
+        successfulTransaction({
+            id: 9012,
+            reference: 'DCK-TYPE-ORDER-NUMBER',
+            metadata: { source_app: 'dckids', order_number: 12345 }
+        }),
+        successfulTransaction({ id: 9013, reference: 'DCK-TYPE-CHANNEL', channel: { secret: 'channel-object-secret' } }),
+        successfulTransaction({
+            id: 9014,
+            reference: 'DCK-TYPE-NAME',
+            customer: { email: 'valid@example.com', first_name: ['private-name-array'], last_name: 'Buyer', phone: '0200000000' }
+        }),
+        successfulTransaction({
+            id: 9015,
+            reference: 'DCK-TYPE-EMAIL',
+            customer: { email: ['private-array-email@example.com'], first_name: 'Valid', last_name: 'Buyer', phone: '0200000000' }
+        }),
+        successfulTransaction({
+            id: 9016,
+            reference: 'DCK-TYPE-PHONE',
+            customer: { email: 'valid2@example.com', first_name: 'Valid', last_name: 'Buyer', phone: { secret: 'phone-object-secret' } }
+        }),
+        successfulTransaction({ id: 9017, reference: 'DCK-TYPE-LONG-CHANNEL', channel: 'x'.repeat(65) }),
+        successfulTransaction({
+            id: 9018,
+            reference: 'DCK-TYPE-BAD-EMAIL',
+            customer: { email: 'not-an-email', first_name: 'Valid', last_name: 'Buyer', phone: '0200000000' }
+        })
+    ];
+    fs.writeFileSync(adversarialInput, JSON.stringify(adversarialRows));
+    const adversarialResult = executeCli(adversarialDbPath, adversarialInput, adversarialReport,
+        ['--apply', '--verified-export', '--backup-confirmed']);
+    await check('adversarial JSON types and formats are all rejected', () => {
+        assert.strictEqual(adversarialResult.status, 0, adversarialResult.stderr);
+        const report = JSON.parse(fs.readFileSync(adversarialReport, 'utf8'));
+        assert.strictEqual(report.summary.input, adversarialRows.length);
+        assert.strictEqual(report.summary.rejected, adversarialRows.length);
+        assert.strictEqual(report.summary.restored, 0);
+        assert.strictEqual(report.summary.wouldRestore, 0);
+    });
+    db = await openDatabase(adversarialDbPath);
+    await check('malformed values never reach orders or payments', async () => {
+        assert.strictEqual((await get(db, 'SELECT COUNT(*) AS count FROM orders')).count, 0);
+        assert.strictEqual((await get(db, 'SELECT COUNT(*) AS count FROM payments')).count, 0);
+    });
+    await close(db);
+    const adversarialReportText = fs.readFileSync(adversarialReport, 'utf8');
+    await check('malformed values and their private markers never reach the report', () => {
+        ['transaction-object-secret', 'private-customer-array', 'channel-object-secret',
+            'private-name-array', 'private-array-email@example.com', 'phone-object-secret',
+            'not-an-email'].forEach((privateValue) => {
+            assert.ok(!adversarialReportText.includes(privateValue), `report leaked ${privateValue}`);
+        });
+    });
+
+    const minimalInput = path.join(tempRoot, 'adversarial', 'minimal.json');
+    const minimalReport = path.join(tempRoot, 'adversarial', 'minimal-report.json');
+    fs.writeFileSync(minimalInput, JSON.stringify([{
+        id: '9020',
+        reference: 'DCK-MINIMAL-VALID',
+        status: 'success',
+        amount: 100,
+        currency: 'GHS',
+        paid_at: '2026-08-20T00:00:00Z',
+        metadata: {},
+        customer: {}
+    }]));
+    const minimalResult = executeCli(adversarialDbPath, minimalInput, minimalReport);
+    await check('bounded optional strings may be absent from an otherwise valid record', () => {
+        assert.strictEqual(minimalResult.status, 0, minimalResult.stderr);
+        const report = JSON.parse(fs.readFileSync(minimalReport, 'utf8'));
+        assert.strictEqual(report.summary.wouldRestore, 1);
+        assert.strictEqual(report.summary.rejected, 0);
+    });
 
     const rollbackDbPath = path.join(tempRoot, 'rollback', 'inventory.db');
     db = await createSchema(rollbackDbPath);

@@ -2,7 +2,11 @@
 const fs = require('fs');
 const path = require('path');
 const sqlite3 = require('sqlite3');
-const { DB_PATH, BACKUP_DIR } = require('./storage');
+const { DB_PATH, BACKUP_DIR, ensureBackupReady } = require('./storage');
+
+// Backups need their destination, but must not create unrelated upload or
+// database directories merely by resolving configured storage paths.
+ensureBackupReady();
 
 const RETAINED_SNAPSHOTS = 30;
 

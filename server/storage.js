@@ -76,13 +76,22 @@ function ensureWritableDirectory(directoryPath) {
 }
 
 function ensureStorageReady() {
-    ensureWritableDirectory(path.dirname(DB_PATH));
-    ensureWritableDirectory(UPLOAD_DIR);
-    ensureWritableDirectory(BACKUP_DIR);
+    ensureDatabaseReady();
+    ensureUploadReady();
+    ensureBackupReady();
 }
 
-// This runs during module loading, before db.js opens SQLite.
-ensureStorageReady();
+function ensureDatabaseReady() {
+    ensureWritableDirectory(path.dirname(DB_PATH));
+}
+
+function ensureUploadReady() {
+    ensureWritableDirectory(UPLOAD_DIR);
+}
+
+function ensureBackupReady() {
+    ensureWritableDirectory(BACKUP_DIR);
+}
 
 module.exports = {
     DB_PATH,
@@ -90,5 +99,8 @@ module.exports = {
     BACKUP_DIR,
     VOLUME_PATH,
     isRailwayProduction,
+    ensureDatabaseReady,
+    ensureUploadReady,
+    ensureBackupReady,
     ensureStorageReady
 };

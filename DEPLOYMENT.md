@@ -146,8 +146,11 @@ copy. Before any apply run, create a fresh `node server/backup_db.js` snapshot,
 confirm its integrity check passed, and retain an off-platform copy.
 
 The reconciliation command uses the configured `DB_PATH`, accepts either a JSON
-array or `{ "data": [...] }`, and always writes a PII-masked JSON report. Run it
-against the verified export first without `--apply`:
+array or `{ "data": [...] }`, and always writes a PII-masked JSON report. The
+report's parent directory must already exist, and the report file itself must be
+new: the command refuses existing files, links, storage/input aliases, and never
+overwrites a prior report. Run it against the verified export first without
+`--apply`:
 
 ```powershell
 npm --prefix server run reconcile:paystack -- --input C:\secure\paystack-export.json --report C:\secure\paystack-dry-run-report.json

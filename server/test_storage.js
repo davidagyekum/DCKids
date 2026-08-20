@@ -20,10 +20,11 @@ function check(name, fn) {
     }
 }
 
-function loadStorage(env) {
+function loadStorage(env, initialize = false) {
     const result = spawnSync(process.execPath, ['-e',
-        "const storage = require(process.argv[1]); process.stdout.write(JSON.stringify(storage));",
-        storageModule
+        "const storage = require(process.argv[1]); if (process.argv[2] === 'ready') storage.ensureStorageReady(); process.stdout.write(JSON.stringify(storage));",
+        storageModule,
+        initialize ? 'ready' : 'resolve-only'
     ], {
         env: Object.assign({}, process.env, {
             NODE_ENV: 'test',
@@ -43,12 +44,18 @@ try {
     const explicitUploads = path.join(tempRoot, 'local', 'uploads');
     const explicitBackups = path.join(tempRoot, 'local', 'backups');
     const local = loadStorage({ DB_PATH: explicitDb, UPLOAD_DIR: explicitUploads, BACKUP_DIR: explicitBackups });
-    check('preserves explicit local durable paths and creates their directories', () => {
+    check('resolves explicit local durable paths without creating directories on import', () => {
         assert.strictEqual(local.status, 0, local.stderr);
         const storage = JSON.parse(local.stdout);
         assert.strictEqual(storage.DB_PATH, explicitDb);
         assert.strictEqual(storage.UPLOAD_DIR, explicitUploads);
         assert.strictEqual(storage.BACKUP_DIR, explicitBackups);
+        [path.dirname(explicitDb), explicitUploads, explicitBackups].forEach((directory) => assert.ok(!fs.existsSync(directory), directory));
+    });
+
+    const initialized = loadStorage({ DB_PATH: explicitDb, UPLOAD_DIR: explicitUploads, BACKUP_DIR: explicitBackups }, true);
+    check('explicit storage readiness creates every configured durable directory', () => {
+        assert.strictEqual(initialized.status, 0, initialized.stderr);
         [path.dirname(explicitDb), explicitUploads, explicitBackups].forEach((directory) => assert.ok(fs.existsSync(directory), directory));
     });
 

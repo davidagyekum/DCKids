@@ -1,6 +1,10 @@
 const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
-const { DB_PATH: dbPath } = require('./storage');
+const { DB_PATH: dbPath, ensureStorageReady } = require('./storage');
+
+// Server startup owns durable-directory creation. Importing storage.js only
+// resolves paths so read-only utilities do not create unrelated directories.
+ensureStorageReady();
 
 const SKU_PREFIXES = { clothing: 'CLO', shoes: 'SHO', accessories: 'ACC', newborn: 'NEW', bedding: 'BED', essentials: 'ESS', feeding: 'FEE', gear: 'GEA', bathcare: 'BAT' };
 const CATEGORY_IMAGES = { clothing: 'images/category-fallbacks/clothing.webp', shoes: 'images/category-fallbacks/shoes.webp', accessories: 'images/category-fallbacks/accessories.webp', newborn: 'images/category-fallbacks/newborn.webp', bedding: 'images/category-fallbacks/bedding.webp', essentials: 'images/category-fallbacks/essentials.webp', feeding: 'images/category-fallbacks/feeding.webp', gear: 'images/category-fallbacks/gear.webp', bathcare: 'images/category-fallbacks/bathcare.webp' };
