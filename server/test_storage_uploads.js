@@ -56,14 +56,24 @@ function startServer() {
 }
 
 async function waitForServer() {
-    for (let attempt = 0; attempt < 30; attempt++) {
+    const deadline = Date.now() + 15000;
+    while (Date.now() < deadline) {
+        if (child.exitCode !== null || child.signalCode !== null) {
+            throw new Error(`server exited before readiness: ${child.testOutput()}`);
+        }
         try {
             const response = await fetch(`${baseUrl}/api/settings`);
             if (response.ok) return;
         } catch (error) { /* server is still starting */ }
-        await new Promise((resolve) => setTimeout(resolve, 100));
+        if (child.exitCode !== null || child.signalCode !== null) {
+            throw new Error(`server exited before readiness: ${child.testOutput()}`);
+        }
+        const remainingMs = deadline - Date.now();
+        if (remainingMs > 0) {
+            await new Promise((resolve) => setTimeout(resolve, Math.min(100, remainingMs)));
+        }
     }
-    throw new Error(`server did not start: ${child.testOutput()}`);
+    throw new Error(`server did not become ready within 15000ms: ${child.testOutput()}`);
 }
 
 async function stopServer() {
