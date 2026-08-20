@@ -18,7 +18,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Playfair+Display:wght@500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="admin.css?v=112">
+  <link rel="stylesheet" href="admin.css?v=113">
   <!-- CRITICAL MOBILE FIX — inline so it always loads with the HTML,
        bypasses any stale service-worker or browser CSS cache.
        These rules ensure the sidebar collapses on phones/tablets. -->
@@ -779,6 +779,17 @@
             </a>
           </div>
         </div>
+
+        <section class="dashboard-recovery-alert" id="dashboard-recovery-alert" role="status" aria-live="polite" aria-atomic="true" aria-labelledby="dashboard-recovery-alert-title" aria-describedby="dashboard-recovery-alert-message" hidden>
+          <span class="dashboard-recovery-alert__icon" aria-hidden="true">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="10" rx="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path><path d="M12 15v2"></path></svg>
+          </span>
+          <div class="dashboard-recovery-alert__copy">
+            <h2 id="dashboard-recovery-alert-title"></h2>
+            <p id="dashboard-recovery-alert-message"></p>
+          </div>
+          <button type="button" class="dashboard-recovery-alert__action" onclick="manageRecoveryCodes()">Manage recovery codes</button>
+        </section>
 
         <!-- Stat Widgets -->
         <div class="stats-grid">
@@ -4805,9 +4816,11 @@
               <span>Log out</span>
             </button>
           </div>
-          <section class="settings-recovery-card" id="recovery-security-card" aria-labelledby="recovery-security-title">
+          <section class="settings-recovery-card" id="recovery-security-card" tabindex="-1" aria-labelledby="recovery-security-title">
             <div class="settings-recovery-card__copy">
-              <span class="settings-recovery-card__icon" aria-hidden="true">🔐</span>
+              <span class="settings-recovery-card__icon" aria-hidden="true">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="10" rx="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path><path d="M12 15v2"></path></svg>
+              </span>
               <div>
                 <h2 id="recovery-security-title">Security &amp; recovery codes</h2>
                 <p>Use a one-time code when email or Google sign-in is unavailable.</p>
@@ -4816,8 +4829,8 @@
               </div>
             </div>
             <div class="settings-recovery-card__actions">
-              <span class="settings-recovery-card__label">Unused codes</span>
-              <strong id="recovery-code-remaining" aria-hidden="true">— / 8</strong>
+              <span class="settings-recovery-card__label">Recovery code use</span>
+              <strong id="recovery-code-remaining">Checking…</strong>
               <button type="button" id="recovery-code-regenerate-btn" class="btn btn-primary" onclick="regenerateRecoveryCodes()">Generate new codes</button>
             </div>
           </section>
@@ -6206,7 +6219,8 @@
   <!-- Scripts -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="image-resolver.js?v=1"></script>
-  <script src="admin.js?v=117"></script>
+  <script src="admin-recovery-view.js?v=1"></script>
+  <script src="admin.js?v=118"></script>
   <script>
     // Keep the admin page on fresh code: when an updated service worker takes
     // control, reload once (guarded against loops and first-registration).

@@ -6134,22 +6134,34 @@ function loadSettingsTab() {
 }
 
 function renderRecoveryCodeStatus(remaining, total) {
-    var status = document.getElementById('recovery-code-status');
-    var count = document.getElementById('recovery-code-remaining');
-    var usable = Math.max(0, Number(remaining) || 0);
-    var available = Math.max(1, Number(total) || 8);
-    if (count) count.textContent = usable + ' / ' + available;
-    if (!status) return;
-    status.removeAttribute('data-tone');
-    if (usable === 0) {
-        status.textContent = 'No unused recovery codes remain. Generate a fresh set now.';
-        status.setAttribute('data-tone', 'danger');
-    } else if (usable <= 2) {
-        status.textContent = 'Only ' + usable + ' recovery code' + (usable === 1 ? '' : 's') + ' remain. Generate a fresh set soon.';
-        status.setAttribute('data-tone', 'warning');
-    } else {
-        status.textContent = usable + ' unused recovery codes remain. Each code works once.';
+    if (window.DcKidsRecoveryView) {
+        return window.DcKidsRecoveryView.renderRecoveryCodeSurfaces(document, remaining, total);
     }
+    var status = document.getElementById('recovery-code-status');
+    if (status) {
+        status.textContent = 'Recovery-code status tools did not load. Refresh this page and try again.';
+        status.setAttribute('data-tone', 'danger');
+    }
+    return null;
+}
+
+function hideRecoveryCodeDashboardAlert() {
+    if (window.DcKidsRecoveryView) {
+        window.DcKidsRecoveryView.hideRecoveryCodeDashboardAlert(document);
+        return;
+    }
+    var alert = document.getElementById('dashboard-recovery-alert');
+    if (alert) alert.hidden = true;
+}
+
+function manageRecoveryCodes() {
+    if (typeof switchTab === 'function') switchTab('tab-settings');
+    window.setTimeout(function () {
+        var card = document.getElementById('recovery-security-card');
+        if (!card) return;
+        if (card.scrollIntoView) card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        if (card.focus) card.focus({ preventScroll: true });
+    }, 120);
 }
 
 async function recoveryAdminRequest(path, options) {
@@ -6178,15 +6190,20 @@ async function recoveryAdminRequest(path, options) {
 async function loadRecoveryCodeStatus() {
     var status = document.getElementById('recovery-code-status');
     if (!status || !localStorage.getItem('adminToken')) return;
+    hideRecoveryCodeDashboardAlert();
     status.textContent = 'Checking unused recovery codes…';
     status.removeAttribute('data-tone');
+    var count = document.getElementById('recovery-code-remaining');
+    if (count) count.textContent = 'Checking…';
     try {
         var data = await recoveryAdminRequest('/status', { method: 'GET' });
         renderRecoveryCodeStatus(data.remaining, data.total);
     } catch (error) {
+        hideRecoveryCodeDashboardAlert();
         if (!localStorage.getItem('adminToken')) return;
         status.textContent = error.message || 'Could not load recovery-code status.';
         status.setAttribute('data-tone', 'danger');
+        if (count) count.textContent = 'Unavailable';
     }
 }
 

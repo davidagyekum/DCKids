@@ -6,7 +6,7 @@
     "node": ">=22.13.0"
   },
   "scripts": {
-    "test": "node test_recovery_codes.js && node test_smoke.js",
+    "test": "node test_recovery_codes.js && node test_admin_recovery_view.js && node test_smoke.js",
     "start": "node server.js",
     "build": "npm run build:css",
     "build:css": "npm run build:css:storefront && npm run build:css:admin",
