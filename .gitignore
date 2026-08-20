@@ -45,6 +45,8 @@ dckidsbrand_images/
 .swarm/
 .claude-flow/
 .ruflo/
+.worktrees/
+.superpowers/
 
 # Large unused brand media (TikTok source content)
 dckidsbrand_videos/
