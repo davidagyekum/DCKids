@@ -7,6 +7,7 @@ const jwt = require('jsonwebtoken');
 const { initializeApp: initializeFirebaseAdmin, applicationDefault, cert, getApps: getFirebaseApps } = require('firebase-admin/app');
 const { getAuth: getFirebaseAuth } = require('firebase-admin/auth');
 const db = require('./db');
+const { UPLOAD_DIR } = require('./storage');
 const {
     DEFAULT_RECOVERY_CODE_COUNT,
     replaceRecoveryCodes,
@@ -90,6 +91,10 @@ app.use((req, res, next) => {
 // Last-Modified and can serve a stale .css/.js straight from disk cache on a
 // normal reload — bypassing the service worker's network-first fetch entirely,
 // since fetch() still honors the underlying HTTP cache. Images/fonts cache normally.
+// Product uploads live on durable storage in production. If the requested
+// file is not an upload, fall through to checked-in /images assets below.
+app.use('/images', express.static(UPLOAD_DIR));
+
 app.use(express.static(path.join(__dirname, '..'), {
     setHeaders: function (res, filePath) {
         if (filePath.endsWith('.html') || filePath.endsWith('service-worker.js') ||
@@ -3249,14 +3254,17 @@ app.get('/api/products/image-health', authenticateToken, requireManager, (req, r
                 else skuCounts.set(sku, (skuCounts.get(sku) || 0) + 1);
                 if (img) used.add(img);
                 if (img && !placeholderRe.test(img)) {
-                    const absolute = safeImageRe.test(img) ? path.join(__dirname, '..', ...img.split('/')) : '';
-                    if (!absolute || !absolute.startsWith(imagesDir) || !fs.existsSync(absolute)) invalidPaths.push({ id: product.id, img });
+                    const isUpload = SERVER_ISSUED_IMAGE_RE.test(img);
+                    const absolute = isUpload
+                        ? path.join(UPLOAD_DIR, path.basename(img))
+                        : (safeImageRe.test(img) ? path.join(__dirname, '..', ...img.split('/')) : '');
+                    if (!absolute || (!isUpload && !absolute.startsWith(imagesDir)) || !fs.existsSync(absolute)) invalidPaths.push({ id: product.id, img });
                 }
             });
             (galleryRows || []).forEach((row) => { if (row.image_url) used.add(String(row.image_url).replace(/\\/g, '/')); });
             const duplicateSkus = Array.from(skuCounts.entries()).filter((entry) => entry[1] > 1).map((entry) => ({ sku: entry[0], count: entry[1] }));
             let uploadFiles;
-            try { uploadFiles = fs.readdirSync(imagesDir).filter((name) => /^product_upload_/i.test(name)); } catch (e) { uploadFiles = []; }
+            try { uploadFiles = fs.readdirSync(UPLOAD_DIR).filter((name) => /^product_upload_/i.test(name)); } catch (e) { uploadFiles = []; }
             const unusedUploads = uploadFiles.map((name) => 'images/' + name).filter((img) => !used.has(img));
             res.json({ missingImages, missingSkus, duplicateSkus, invalidPaths, unusedUploads });
         });
@@ -3310,7 +3318,7 @@ app.post('/api/products/bulk-images', authenticateToken, requireManager, (req, r
         if (ids.includes(id)) return res.status(400).json({ error: 'Duplicate product id: ' + id });
         if (paths.has(img)) return res.status(400).json({ error: 'Duplicate image path: ' + img });
         if (!SERVER_ISSUED_IMAGE_RE.test(img)) return res.status(400).json({ error: 'Unsafe or non-server-issued image path' });
-        const absolute = path.join(__dirname, '..', ...img.split('/'));
+        const absolute = path.join(UPLOAD_DIR, path.basename(img));
         if (!fs.existsSync(absolute)) return res.status(400).json({ error: 'Uploaded image file does not exist: ' + img });
         ids.push(id); paths.add(img);
     }
@@ -3369,11 +3377,8 @@ app.post('/api/upload-image', authenticateToken, requireManager, (req, res) => {
         }
 
         const fs = require('fs');
-        const imagesDir = path.join(__dirname, '..', 'images');
-        if (!fs.existsSync(imagesDir)) fs.mkdirSync(imagesDir, { recursive: true });
-
         const fname = 'product_upload_' + Date.now() + '_' + Math.floor(Math.random() * 1e4) + '.' + ext;
-        fs.writeFileSync(path.join(imagesDir, fname), buf);
+        fs.writeFileSync(path.join(UPLOAD_DIR, fname), buf);
         res.json({ success: true, path: 'images/' + fname, bytes: buf.length });
     } catch (e) {
         serverError(res, e);

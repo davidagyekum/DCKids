@@ -17,18 +17,12 @@
 const fs = require('fs');
 const path = require('path');
 const sqlite3 = require('sqlite3');
-
-const dbFile = path.join(__dirname, 'inventory.db');
-const backupDir = path.join(__dirname, 'backups');
+const { DB_PATH: dbFile, BACKUP_DIR: backupDir } = require('./storage');
 
 if (!fs.existsSync(dbFile)) {
   console.error('Database file not found:', dbFile);
   process.exit(1);
 }
-if (!fs.existsSync(backupDir)) {
-  fs.mkdirSync(backupDir, { recursive: true });
-}
-
 const timestamp = new Date().toISOString().replace(/T/, '_').replace(/\..+/, '').replace(/:/g, '-');
 const backupFile = path.join(backupDir, `inventory_${timestamp}.db`);
 

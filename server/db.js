@@ -1,7 +1,7 @@
 const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
+const { DB_PATH: dbPath } = require('./storage');
 
-const dbPath = process.env.DB_PATH || path.resolve(__dirname, 'inventory.db');
 const SKU_PREFIXES = { clothing: 'CLO', shoes: 'SHO', accessories: 'ACC', newborn: 'NEW', bedding: 'BED', essentials: 'ESS', feeding: 'FEE', gear: 'GEA', bathcare: 'BAT' };
 const CATEGORY_IMAGES = { clothing: 'images/category-fallbacks/clothing.webp', shoes: 'images/category-fallbacks/shoes.webp', accessories: 'images/category-fallbacks/accessories.webp', newborn: 'images/category-fallbacks/newborn.webp', bedding: 'images/category-fallbacks/bedding.webp', essentials: 'images/category-fallbacks/essentials.webp', feeding: 'images/category-fallbacks/feeding.webp', gear: 'images/category-fallbacks/gear.webp', bathcare: 'images/category-fallbacks/bathcare.webp' };
 const DEFAULT_STORE_BANNER = 'China Pre-Orders are open! Message us on WhatsApp for the current closing date.';
