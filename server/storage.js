@@ -19,6 +19,30 @@ function isWithinDirectory(targetPath, directoryPath) {
     return relative === '' || (!relative.startsWith('..' + path.sep) && relative !== '..' && !path.isAbsolute(relative));
 }
 
+// Resolve every existing path segment while retaining missing trailing
+// segments. This detects a configured directory whose existing ancestor is a
+// symlink escaping the Railway volume before mkdir/write operations follow it.
+function resolvePhysicalPath(targetPath) {
+    let candidate = path.resolve(targetPath);
+    const missingSegments = [];
+    while (true) {
+        try {
+            const resolvedAncestor = fs.realpathSync.native(candidate);
+            return path.resolve(resolvedAncestor, ...missingSegments);
+        } catch (error) {
+            if (error.code !== 'ENOENT') {
+                throw new Error(`Unable to resolve durable storage path: ${targetPath}`, { cause: error });
+            }
+            const parent = path.dirname(candidate);
+            if (parent === candidate) {
+                throw new Error(`Unable to resolve durable storage path: ${targetPath}`, { cause: error });
+            }
+            missingSegments.unshift(path.basename(candidate));
+            candidate = parent;
+        }
+    }
+}
+
 if (isRailwayProduction && !volumeMountPath) {
     throw new Error('RAILWAY_VOLUME_MOUNT_PATH is required for Railway production durable storage.');
 }
@@ -38,8 +62,9 @@ const BACKUP_DIR = resolveConfiguredPath(
 );
 
 if (isRailwayProduction) {
+    const physicalVolumePath = resolvePhysicalPath(VOLUME_PATH);
     [DB_PATH, UPLOAD_DIR, BACKUP_DIR].forEach((durablePath) => {
-        if (!isWithinDirectory(durablePath, VOLUME_PATH)) {
+        if (!isWithinDirectory(resolvePhysicalPath(durablePath), physicalVolumePath)) {
             throw new Error(`Configured durable path resolves outside the mounted volume: ${durablePath}`);
         }
     });

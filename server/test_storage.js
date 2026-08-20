@@ -77,15 +77,37 @@ try {
         assert.match(missingVolume.stderr, /RAILWAY_VOLUME_MOUNT_PATH/i);
     });
 
-    const outsideVolume = loadStorage({
+    [
+        ['DB_PATH', path.join(tempRoot, 'outside.db')],
+        ['UPLOAD_DIR', path.join(tempRoot, 'outside-uploads')],
+        ['BACKUP_DIR', path.join(tempRoot, 'outside-backups')]
+    ].forEach(([name, outsidePath]) => {
+        const outsideVolume = loadStorage({
+            NODE_ENV: 'production',
+            RAILWAY_ENVIRONMENT: 'production',
+            RAILWAY_VOLUME_MOUNT_PATH: volume,
+            [name]: outsidePath
+        });
+        check(`rejects Railway ${name} outside its mounted volume`, () => {
+            assert.notStrictEqual(outsideVolume.status, 0);
+            assert.match(outsideVolume.stderr, /outside.*mounted volume/i);
+        });
+    });
+
+    const outsideDirectory = path.join(tempRoot, 'outside-symlink-target');
+    const uploadsLink = path.join(volume, 'uploads-link');
+    fs.mkdirSync(outsideDirectory, { recursive: true });
+    fs.mkdirSync(volume, { recursive: true });
+    fs.symlinkSync(outsideDirectory, uploadsLink, 'junction');
+    const symlinkEscape = loadStorage({
         NODE_ENV: 'production',
         RAILWAY_ENVIRONMENT: 'production',
         RAILWAY_VOLUME_MOUNT_PATH: volume,
-        UPLOAD_DIR: path.join(tempRoot, 'outside-uploads')
+        UPLOAD_DIR: path.join(uploadsLink, 'not-created-yet')
     });
-    check('rejects Railway durable paths outside its mounted volume', () => {
-        assert.notStrictEqual(outsideVolume.status, 0);
-        assert.match(outsideVolume.stderr, /outside.*mounted volume/i);
+    check('rejects Railway durable paths whose symlink ancestor escapes the mounted volume', () => {
+        assert.notStrictEqual(symlinkEscape.status, 0);
+        assert.match(symlinkEscape.stderr, /outside.*mounted volume/i);
     });
 
     console.log(`\n${passed} passed, 0 failed`);

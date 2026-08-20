@@ -3255,10 +3255,11 @@ app.get('/api/products/image-health', authenticateToken, requireManager, (req, r
                 if (img) used.add(img);
                 if (img && !placeholderRe.test(img)) {
                     const isUpload = SERVER_ISSUED_IMAGE_RE.test(img);
-                    const absolute = isUpload
-                        ? path.join(UPLOAD_DIR, path.basename(img))
-                        : (safeImageRe.test(img) ? path.join(__dirname, '..', ...img.split('/')) : '');
-                    if (!absolute || (!isUpload && !absolute.startsWith(imagesDir)) || !fs.existsSync(absolute)) invalidPaths.push({ id: product.id, img });
+                    const durableUpload = isUpload ? path.join(UPLOAD_DIR, path.basename(img)) : '';
+                    const checkedInImage = safeImageRe.test(img) ? path.join(__dirname, '..', ...img.split('/')) : '';
+                    const hasDurableUpload = Boolean(durableUpload) && fs.existsSync(durableUpload);
+                    const hasCheckedInImage = Boolean(checkedInImage) && checkedInImage.startsWith(imagesDir) && fs.existsSync(checkedInImage);
+                    if (!hasDurableUpload && !hasCheckedInImage) invalidPaths.push({ id: product.id, img });
                 }
             });
             (galleryRows || []).forEach((row) => { if (row.image_url) used.add(String(row.image_url).replace(/\\/g, '/')); });

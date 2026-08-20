@@ -6,6 +6,7 @@ const os = require('os');
 const path = require('path');
 const { spawn } = require('child_process');
 const jwt = require('jsonwebtoken');
+const sqlite3 = require('sqlite3').verbose();
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'dckids-upload-restart-'));
 const dbPath = path.join(tempRoot, 'inventory.db');
@@ -15,6 +16,8 @@ const port = 3057;
 const baseUrl = `http://127.0.0.1:${port}`;
 const secret = 'storage-upload-test-secret';
 const tinyPng = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Z5xkAAAAASUVORK5CYII=';
+const checkedInFallbackFilename = `product_upload_${Date.now()}_${Math.floor(Math.random() * 10000)}.png`;
+const checkedInFallbackPath = path.join(__dirname, '..', 'images', checkedInFallbackFilename);
 let child;
 
 function startServer() {
@@ -65,6 +68,21 @@ function json(method, body, headers) {
     };
 }
 
+function setProductImage(productId, imagePath) {
+    return new Promise((resolve, reject) => {
+        const database = new sqlite3.Database(dbPath, (openError) => {
+            if (openError) return reject(openError);
+            database.run('UPDATE products SET img = ? WHERE id = ?', [imagePath, productId], (runError) => {
+                database.close((closeError) => {
+                    if (runError) reject(runError);
+                    else if (closeError) reject(closeError);
+                    else resolve();
+                });
+            });
+        });
+    });
+}
+
 async function run() {
     startServer();
     await waitForServer();
@@ -99,7 +117,18 @@ async function run() {
     assert.ok(!health.invalidPaths.some((entry) => entry.img === uploaded.path), 'image health must find durable uploads');
     assert.ok(!health.unusedUploads.includes(uploaded.path), 'mapped durable upload must not be reported unused');
 
-    console.log('  PASS  durable upload persists across restart, serves, and remains healthy');
+    fs.writeFileSync(checkedInFallbackPath, Buffer.from(tinyPng.split(',')[1], 'base64'));
+    assert.ok(!fs.existsSync(path.join(uploadDir, checkedInFallbackFilename)), 'fallback fixture must not have a durable copy');
+    const fallbackServed = await fetch(`${baseUrl}/images/${checkedInFallbackFilename}`);
+    assert.strictEqual(fallbackServed.status, 200, 'checked-in uploaded image should be served when durable storage has no copy');
+    await setProductImage(2, `images/${checkedInFallbackFilename}`);
+    const fallbackHealthResponse = await fetch(`${baseUrl}/api/products/image-health`, { headers: auth });
+    const fallbackHealth = await fallbackHealthResponse.json();
+    assert.strictEqual(fallbackHealthResponse.status, 200);
+    assert.ok(!fallbackHealth.invalidPaths.some((entry) => entry.img === `images/${checkedInFallbackFilename}`),
+        'image health must accept a checked-in uploaded image when durable storage has no copy');
+
+    console.log('  PASS  durable and checked-in uploaded images serve and remain healthy');
 }
 
 run().catch((error) => {
@@ -107,5 +136,6 @@ run().catch((error) => {
     process.exitCode = 1;
 }).finally(async () => {
     await stopServer();
+    try { fs.unlinkSync(checkedInFallbackPath); } catch (error) { /* fixture was not created */ }
     fs.rmSync(tempRoot, { recursive: true, force: true });
 });
