@@ -137,6 +137,38 @@ The callback page is not payment authority. Signed Paystack webhooks and server-
    product and recent order in the admin UI before reopening traffic. Record
    the controlled restart and backup timestamp in the incident log.
 
+### Paystack reconciliation after the 2026-08-19 incident
+
+The recovery window begins **2026-08-19 00:00 Africa/Lagos**. Obtain a verified
+Paystack transaction export for that window directly from Paystack; do not use
+browser callback data, screenshots, forwarded JSON, or an unverified third-party
+copy. Before any apply run, create a fresh `node server/backup_db.js` snapshot,
+confirm its integrity check passed, and retain an off-platform copy.
+
+The reconciliation command uses the configured `DB_PATH`, accepts either a JSON
+array or `{ "data": [...] }`, and always writes a PII-masked JSON report. Run it
+against the verified export first without `--apply`:
+
+```powershell
+npm --prefix server run reconcile:paystack -- --input C:\secure\paystack-export.json --report C:\secure\paystack-dry-run-report.json
+```
+
+Review every `wouldRestore`, `alreadyPresent`, and `rejected` entry. Only then
+run apply with both required attestations:
+
+```powershell
+npm --prefix server run reconcile:paystack -- --input C:\secure\paystack-export.json --report C:\secure\paystack-apply-report.json --apply --verified-export --backup-confirmed
+```
+
+Apply restores only successful GHS `DCK-` records compatible with DC Kids. Each
+new recovery order remains in `payment_review`; product and delivery details
+must be confirmed manually. The tool creates no order items, changes no stock,
+recognizes no revenue, sends no notification, and makes no Paystack request.
+Re-running the same export is safe: existing provider references are reported as
+`alreadyPresent` instead of being inserted again. Keep both reports with the
+incident record; although they mask email and omit raw metadata, they still
+contain payment references and transaction IDs and should be access-controlled.
+
 ## 7. Production checklist
 
 - [ ] `NODE_ENV=production` set on the host

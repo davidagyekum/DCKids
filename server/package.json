@@ -6,7 +6,8 @@
     "node": ">=22.13.0"
   },
   "scripts": {
-    "test": "node test_storage.js && node test_storage_uploads.js && node test_backup_db.js && node test_shutdown_lifecycle.js && node test_recovery_codes.js && node test_admin_recovery_view.js && node test_smoke.js",
+    "test": "node test_storage.js && node test_storage_uploads.js && node test_backup_db.js && node test_reconcile_paystack.js && node test_shutdown_lifecycle.js && node test_recovery_codes.js && node test_admin_recovery_view.js && node test_smoke.js",
+    "reconcile:paystack": "node reconcile_paystack.js",
     "start": "node server.js",
     "build": "npm run build:css",
     "build:css": "npm run build:css:storefront && npm run build:css:admin",
