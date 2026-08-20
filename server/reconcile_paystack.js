@@ -8,6 +8,10 @@ const { DB_PATH } = require('./storage');
 const REVIEW_NOTES = 'Recovered from a verified Paystack export; product and delivery details need confirmation.';
 const REFERENCE_PATTERN = /^DCK-[A-Za-z0-9][A-Za-z0-9-]{0,126}$/;
 const ORDER_NUMBER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9-]{0,99}$/;
+const PAYSTACK_CHANNELS = new Set([
+    'card', 'bank', 'apple_pay', 'ussd', 'qr', 'mobile_money',
+    'bank_transfer', 'eft', 'capitec_pay', 'payattitude'
+]);
 
 function parseArguments(argv) {
     const options = { apply: false, verifiedExport: false, backupConfirmed: false };
@@ -101,14 +105,33 @@ function isPlainObject(value) {
         Object.getPrototypeOf(value) === Object.prototype;
 }
 
-function optionalString(object, property, maximumLength, pattern) {
+function optionalString(object, property, maximumLength, pattern, allowNull = false) {
     if (!Object.prototype.hasOwnProperty.call(object, property)) return { valid: true, value: null };
+    if (object[property] === null && allowNull) return { valid: true, value: null };
     if (typeof object[property] !== 'string') return { valid: false, value: null };
     const value = object[property].trim();
     if (!value || value.length > maximumLength || (pattern && !pattern.test(value))) {
         return { valid: false, value: null };
     }
     return { valid: true, value };
+}
+
+function isValidPaystackTimestamp(value) {
+    if (typeof value !== 'string' || value.length > 64) return false;
+    const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,3}))?(Z|[+-]\d{2}:\d{2})$/.exec(value);
+    if (!match || Number.isNaN(Date.parse(value))) return false;
+    const [, year, month, day, hour, minute, second, fraction = '0'] = match;
+    const milliseconds = Number(fraction.padEnd(3, '0'));
+    const calendar = new Date(0);
+    calendar.setUTCFullYear(Number(year), Number(month) - 1, Number(day));
+    calendar.setUTCHours(Number(hour), Number(minute), Number(second), milliseconds);
+    return calendar.getUTCFullYear() === Number(year) &&
+        calendar.getUTCMonth() === Number(month) - 1 &&
+        calendar.getUTCDate() === Number(day) &&
+        calendar.getUTCHours() === Number(hour) &&
+        calendar.getUTCMinutes() === Number(minute) &&
+        calendar.getUTCSeconds() === Number(second) &&
+        calendar.getUTCMilliseconds() === milliseconds;
 }
 
 function maskEmail(email) {
@@ -144,16 +167,14 @@ function normalizeTransaction(record) {
     let transactionId;
     if (typeof record.id === 'number' && Number.isSafeInteger(record.id) && record.id > 0) {
         transactionId = String(record.id);
-    } else if (typeof record.id === 'string' && /^[0-9]{1,128}$/.test(record.id)) {
+    } else if (typeof record.id === 'string' && /^[0-9]{1,32}$/.test(record.id) && /[1-9]/.test(record.id)) {
         transactionId = record.id;
     } else {
         return reject('missing_transaction_id');
     }
 
     const paidAtValue = Object.prototype.hasOwnProperty.call(record, 'paid_at') ? record.paid_at : record.paidAt;
-    const timestampPattern = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})$/;
-    if (typeof paidAtValue !== 'string' || paidAtValue.length > 64 ||
-        !timestampPattern.test(paidAtValue) || Number.isNaN(Date.parse(paidAtValue))) {
+    if (!isValidPaystackTimestamp(paidAtValue)) {
         return reject('invalid_paid_timestamp');
     }
     const paidAt = paidAtValue;
@@ -169,16 +190,16 @@ function normalizeTransaction(record) {
     const metadataOrderNumber = optionalString(metadata, 'order_number', 100, ORDER_NUMBER_PATTERN);
     if (!metadataOrderNumber.valid) return reject('invalid_order_number');
     const channel = optionalString(record, 'channel', 64, /^[A-Za-z0-9_-]+$/);
-    if (!channel.valid) return reject('invalid_channel');
-    const firstName = optionalString(customer, 'first_name', 100);
-    const lastName = optionalString(customer, 'last_name', 100);
-    const fallbackName = optionalString(customer, 'name', 200);
-    const phone = optionalString(customer, 'phone', 50);
+    if (!channel.valid || (channel.value && !PAYSTACK_CHANNELS.has(channel.value))) return reject('invalid_channel');
+    const firstName = optionalString(customer, 'first_name', 100, null, true);
+    const lastName = optionalString(customer, 'last_name', 100, null, true);
+    const fallbackName = optionalString(customer, 'name', 200, null, true);
+    const phone = optionalString(customer, 'phone', 50, null, true);
     if (!firstName.valid || !lastName.valid || !fallbackName.valid || !phone.valid) {
         return reject('malformed_customer');
     }
     let customerEmail = null;
-    if (Object.prototype.hasOwnProperty.call(customer, 'email')) {
+    if (Object.prototype.hasOwnProperty.call(customer, 'email') && customer.email !== null) {
         customerEmail = normalizeEmail(customer.email);
         if (!customerEmail) return reject('malformed_customer');
     }

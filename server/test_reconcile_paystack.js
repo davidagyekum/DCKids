@@ -451,7 +451,16 @@ async function runTests() {
             id: 9018,
             reference: 'DCK-TYPE-BAD-EMAIL',
             customer: { email: 'not-an-email', first_name: 'Valid', last_name: 'Buyer', phone: '0200000000' }
-        })
+        }),
+        successfulTransaction({ id: 9019, reference: 'DCK-TYPE-CHANNEL-TOKEN', channel: 'alice-phone-token' }),
+        successfulTransaction({ id: '0', reference: 'DCK-TYPE-ID-ZERO' }),
+        successfulTransaction({ id: '000000', reference: 'DCK-TYPE-ID-ALL-ZERO' }),
+        successfulTransaction({ id: '+9022', reference: 'DCK-TYPE-ID-PLUS' }),
+        successfulTransaction({ id: '-9023', reference: 'DCK-TYPE-ID-MINUS' }),
+        successfulTransaction({ id: '9024.5', reference: 'DCK-TYPE-ID-DECIMAL' }),
+        successfulTransaction({ id: ' 9025 ', reference: 'DCK-TYPE-ID-WHITESPACE' }),
+        successfulTransaction({ id: '9'.repeat(33), reference: 'DCK-TYPE-ID-TOO-LONG' }),
+        successfulTransaction({ id: 9027, reference: 'DCK-TYPE-CALENDAR-DATE', paid_at: '2026-02-30T00:00:00Z' })
     ];
     fs.writeFileSync(adversarialInput, JSON.stringify(adversarialRows));
     const adversarialResult = executeCli(adversarialDbPath, adversarialInput, adversarialReport,
@@ -474,9 +483,59 @@ async function runTests() {
     await check('malformed values and their private markers never reach the report', () => {
         ['transaction-object-secret', 'private-customer-array', 'channel-object-secret',
             'private-name-array', 'private-array-email@example.com', 'phone-object-secret',
-            'not-an-email'].forEach((privateValue) => {
+            'not-an-email', 'alice-phone-token'].forEach((privateValue) => {
             assert.ok(!adversarialReportText.includes(privateValue), `report leaked ${privateValue}`);
         });
+    });
+
+    const nullableDbPath = path.join(tempRoot, 'nullable-customer', 'inventory.db');
+    db = await createSchema(nullableDbPath);
+    await close(db);
+    const nullableInput = path.join(tempRoot, 'nullable-customer', 'export.json');
+    const nullableReport = path.join(tempRoot, 'nullable-customer', 'report.json');
+    const nullableTransaction = successfulTransaction({
+        id: 9030,
+        reference: 'DCK-NULLABLE-CUSTOMER',
+        customer: { email: null, first_name: null, last_name: null, name: null, phone: null },
+        metadata: { source_app: 'dckids', order_number: 'ORD-NULLABLE-CUSTOMER' }
+    });
+    delete nullableTransaction.channel;
+    fs.writeFileSync(nullableInput, JSON.stringify([nullableTransaction]));
+    const nullableResult = executeCli(nullableDbPath, nullableInput, nullableReport,
+        ['--apply', '--verified-export', '--backup-confirmed']);
+    await check('nullable optional customer identity fields are treated as absent', () => {
+        assert.strictEqual(nullableResult.status, 0, nullableResult.stderr);
+        const report = JSON.parse(fs.readFileSync(nullableReport, 'utf8'));
+        assert.strictEqual(report.summary.restored, 1);
+        assert.strictEqual(report.restored[0].maskedEmail, null);
+        assert.strictEqual(report.restored[0].channel, null);
+    });
+    db = await openDatabase(nullableDbPath);
+    await check('nullable customer identity is stored as SQL null', async () => {
+        const order = await get(db, `SELECT customer_name, customer_phone, customer_email
+            FROM orders WHERE order_number = 'ORD-NULLABLE-CUSTOMER'`);
+        assert.deepStrictEqual(order, { customer_name: null, customer_phone: null, customer_email: null });
+    });
+    await close(db);
+
+    const officialChannels = [
+        'card', 'bank', 'apple_pay', 'ussd', 'qr', 'mobile_money',
+        'bank_transfer', 'eft', 'capitec_pay', 'payattitude'
+    ];
+    const channelInput = path.join(tempRoot, 'nullable-customer', 'channels.json');
+    const channelReport = path.join(tempRoot, 'nullable-customer', 'channels-report.json');
+    fs.writeFileSync(channelInput, JSON.stringify(officialChannels.map((channel, index) => successfulTransaction({
+        id: 9040 + index,
+        reference: `DCK-OFFICIAL-CHANNEL-${index}`,
+        channel,
+        metadata: { source_app: 'dckids', order_number: `ORD-OFFICIAL-CHANNEL-${index}` }
+    }))));
+    const channelResult = executeCli(nullableDbPath, channelInput, channelReport);
+    await check('every official Paystack channel remains accepted and preserved', () => {
+        assert.strictEqual(channelResult.status, 0, channelResult.stderr);
+        const report = JSON.parse(fs.readFileSync(channelReport, 'utf8'));
+        assert.strictEqual(report.summary.wouldRestore, officialChannels.length);
+        assert.deepStrictEqual(report.wouldRestore.map((entry) => entry.channel), officialChannels);
     });
 
     const minimalInput = path.join(tempRoot, 'adversarial', 'minimal.json');
