@@ -47,6 +47,10 @@ is up to your host:
 | `RESEND_API_KEY` / `RESEND_FROM` | optional | Sends admin sign-in codes and notification emails via Resend. Unset in production = storefront checkout continues, while admin email-code sign-in and email notifications are disabled; Google/recovery sign-in remains available. In local development, codes are printed to the server log. |
 | `APP_URL` | recommended | Public base URL used in emails (e.g. `https://dckidsbrand.com`). |
 | `PORT` | no | Listening port (default 3000). Most hosts inject this automatically. |
+| `RAILWAY_VOLUME_MOUNT_PATH` | Railway production | Mount a persistent Railway Volume at `/data` and set this exact value to `/data`. The app refuses Railway production without it. |
+| `DB_PATH` | Railway production | `/data/inventory.db` (optional only because it is the default when the volume is configured). |
+| `UPLOAD_DIR` | Railway production | `/data/uploads` (optional only because it is the default when the volume is configured). |
+| `BACKUP_DIR` | Railway production | `/data/backups` (optional only because it is the default when the volume is configured). |
 | `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` | no | Optional instant order alerts. `TELEGRAM_CHAT_ID` accepts **one or more** comma-separated destinations — each can be a personal chat id or a shared channel/group id. To add the new owner, append their id (e.g. `111111111,222222222`); every destination receives each order. For a channel, add the bot as an admin and use the channel id. |
 | `SHOP_NOTIFY_EMAIL`, `SMTP_*` | no | Optional transactional email. |
 | `FIREBASE_API_KEY`, `FIREBASE_AUTH_DOMAIN`, `FIREBASE_PROJECT_ID`, `FIREBASE_APP_ID` | **yes** | Public Firebase web-app configuration used by the customer account page. |
@@ -100,11 +104,38 @@ The callback page is not payment authority. Signed Paystack webhooks and server-
 
 ## 6. Data & backups
 
-- SQLite database lives at `server/inventory.db` (plus `-wal`/`-shm` sidecars).
-- It is **gitignored** — it holds customer/order data and must not be committed.
-- Persist this file across deploys (mount a volume / persistent disk). If it is
-  wiped, the catalogue re-seeds and a new admin account is created.
-- `node server/backup_db.js` writes a backup copy.
+- SQLite is authoritative and runs as a **single application instance**. Do not
+  scale this service horizontally or attach its `/data` volume to another writer.
+- For Railway production, create one Railway Volume mounted at **`/data`** and
+  set `RAILWAY_VOLUME_MOUNT_PATH=/data`. The resolved paths are
+  `DB_PATH=/data/inventory.db`, `UPLOAD_DIR=/data/uploads`, and
+  `BACKUP_DIR=/data/backups`; do not point any of them outside `/data`.
+- The database and its `-wal`/`-shm` sidecars hold customer/order data and are
+  **gitignored**. Never commit them. Railway health checks call `GET /api/health`,
+  which checks SQLite without returning paths, credentials, or record data.
+- Railway sends `SIGTERM` during a deploy. Allow the process its **15-second
+  drain**: it stops accepting requests, checkpoints WAL, then closes SQLite.
+- Run `node server/backup_db.js` daily. It uses SQLite's online backup API,
+  verifies `PRAGMA integrity_check`, and retains the 30 newest snapshots in
+  `/data/backups`. Also enable Railway Volume backups on a weekly schedule and
+  keep at least one tested off-platform copy.
+
+### Safe Railway cutover and restore
+
+1. Before cutover, create and mount the `/data` volume, set the four variables
+   above, and run the service as exactly one replica.
+2. Run a fresh `node server/backup_db.js`, copy that verified snapshot off the
+   service, then deploy. Wait for `/api/health` to return HTTP 200 with
+   `{"status":"ok","database":"ready","persistentStorage":true}` before
+   sending production traffic.
+3. For a restore, first stop the sole service and wait for its 15-second drain.
+   Preserve the current `/data/inventory.db`, `-wal`, and `-shm` files as an
+   incident copy; replace `inventory.db` with the verified snapshot, and remove
+   only the stale `inventory.db-wal` and `inventory.db-shm` sidecars from that
+   stopped database directory.
+4. Restart one replica, confirm `/api/health` is healthy, then verify a known
+   product and recent order in the admin UI before reopening traffic. Record
+   the controlled restart and backup timestamp in the incident log.
 
 ## 7. Production checklist
 
@@ -114,7 +145,10 @@ The callback page is not payment authority. Signed Paystack webhooks and server-
 - [ ] `OWNER_EMAIL` set to your owner address(es) — so a stranger can't claim owner
 - [ ] `RESEND_API_KEY` + `RESEND_FROM` set (and a domain verified in Resend) so sign-in codes actually email
 - [ ] `APP_URL` set to your public URL (used in emails)
-- [ ] `server/inventory.db` on persistent storage
+- [ ] Exactly one Railway replica has a Volume mounted at `/data`
+- [ ] `RAILWAY_VOLUME_MOUNT_PATH=/data` and the resolved `DB_PATH`, `UPLOAD_DIR`, and `BACKUP_DIR` stay under `/data`
+- [ ] Railway health check is `/api/health` and returns HTTP 200 after a controlled restart
+- [ ] Daily validated SQLite snapshot and weekly Railway Volume backup configured
 - [ ] Served over HTTPS (required for the PWA service worker and HSTS)
 - [ ] Production runtime is Node 22.13 or newer
 - [ ] Firebase Email/Password and Google providers enabled

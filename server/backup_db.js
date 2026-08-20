@@ -1,71 +1,80 @@
-/* DC Kids — database backup
- *
- * The DB runs in WAL mode, so a plain file copy of inventory.db is UNSAFE while
- * the server is running: recently-committed rows may still live in the
- * inventory.db-wal sidecar and not yet be merged into the main file. A naive
- * copy can capture a stale or torn snapshot.
- *
- * This uses SQLite's online backup API (sqlite3 .backup), which produces a
- * single consistent .db file with the WAL fully merged in — safe even while
- * the server is actively reading and writing. The output is a normal,
- * self-contained SQLite file (no sidecars needed to restore it).
- *
- * Usage:  node server/backup_db.js
- * Restore: stop the server, replace inventory.db with a backup file
- *          (delete any leftover inventory.db-wal / -shm first), restart.
- */
+/* DC Kids — WAL-safe database backup. */
 const fs = require('fs');
 const path = require('path');
 const sqlite3 = require('sqlite3');
-const { DB_PATH: dbFile, BACKUP_DIR: backupDir } = require('./storage');
+const { DB_PATH, BACKUP_DIR } = require('./storage');
 
-if (!fs.existsSync(dbFile)) {
-  console.error('Database file not found:', dbFile);
-  process.exit(1);
+const RETAINED_SNAPSHOTS = 30;
+
+function fail(message, error) {
+    console.error(message, error ? error.message : '');
+    process.exitCode = 1;
 }
-const timestamp = new Date().toISOString().replace(/T/, '_').replace(/\..+/, '').replace(/:/g, '-');
-const backupFile = path.join(backupDir, `inventory_${timestamp}.db`);
 
-const source = new sqlite3.Database(dbFile, sqlite3.OPEN_READONLY, (err) => {
-  if (err) {
-    console.error('Error opening source database:', err.message);
-    process.exit(1);
-  }
-});
-
-// node-sqlite3 exposes the online backup API as db.backup(filename).
-// It copies a transactionally-consistent snapshot, WAL included.
-source.serialize(() => {
-  const backup = source.backup(backupFile);
-
-  backup.step(-1, function stepDone(err) {
-    if (err) {
-      console.error('Error during backup:', err.message);
-      backup.finish(() => source.close());
-      process.exit(1);
-      return;
-    }
-    if (backup.remaining > 0) {
-      // Large DB still copying — keep stepping.
-      return backup.step(-1, stepDone);
-    }
-    backup.finish((finishErr) => {
-      source.close();
-      if (finishErr) {
-        console.error('Error finalizing backup:', finishErr.message);
-        process.exit(1);
-      }
-      // Prune to the 30 most recent backups so the folder doesn't grow forever.
-      try {
-        const files = fs.readdirSync(backupDir)
-          .filter(f => /^inventory_.*\.db$/.test(f))
-          .map(f => ({ f, t: fs.statSync(path.join(backupDir, f)).mtimeMs }))
-          .sort((a, b) => b.t - a.t);
-        files.slice(30).forEach(({ f }) => fs.unlinkSync(path.join(backupDir, f)));
-      } catch (e) { /* pruning is best-effort */ }
-
-      const sizeKb = (fs.statSync(backupFile).size / 1024).toFixed(0);
-      console.log(`Backed up database (WAL-safe) to ${backupFile} (${sizeKb} KB)`);
+function closeDatabase(database, callback) {
+    database.close((closeError) => {
+        if (closeError) console.error('Error closing database:', closeError.message);
+        callback();
     });
-  });
-});
+}
+
+function pruneSnapshots() {
+    const snapshots = fs.readdirSync(BACKUP_DIR)
+        .filter((file) => /^inventory_.*\.db$/.test(file))
+        .map((file) => ({ file, modifiedAt: fs.statSync(path.join(BACKUP_DIR, file)).mtimeMs }))
+        .sort((left, right) => right.modifiedAt - left.modifiedAt || right.file.localeCompare(left.file));
+    snapshots.slice(RETAINED_SNAPSHOTS).forEach(({ file }) => fs.unlinkSync(path.join(BACKUP_DIR, file)));
+}
+
+function validateSnapshot(snapshotPath, callback) {
+    const snapshot = new sqlite3.Database(snapshotPath, sqlite3.OPEN_READONLY, (openError) => {
+        if (openError) return callback(openError);
+        snapshot.get('PRAGMA integrity_check', (queryError, row) => {
+            const integrityError = queryError || !row || row.integrity_check !== 'ok'
+                ? (queryError || new Error(`integrity_check returned ${row && row.integrity_check}`))
+                : null;
+            closeDatabase(snapshot, () => callback(integrityError));
+        });
+    });
+}
+
+if (!fs.existsSync(DB_PATH)) {
+    fail(`Database file not found: ${DB_PATH}`);
+} else {
+    const timestamp = new Date().toISOString().replace(/[T:.]/g, '-').replace('Z', '');
+    const backupFile = path.join(BACKUP_DIR, `inventory_${timestamp}.db`);
+    const source = new sqlite3.Database(DB_PATH, sqlite3.OPEN_READONLY, (openError) => {
+        if (openError) {
+            fail('Error opening source database:', openError);
+            return;
+        }
+
+        // SQLite's online backup API produces a transactionally consistent,
+        // self-contained snapshot even when committed data remains in the WAL.
+        const backup = source.backup(backupFile);
+        const finishWithError = (message, error) => {
+            backup.finish(() => closeDatabase(source, () => fail(message, error)));
+        };
+        const step = (stepError) => {
+            if (stepError) return finishWithError('Error during backup:', stepError);
+            if (backup.remaining > 0) return backup.step(-1, step);
+            backup.finish((finishError) => {
+                if (finishError) return closeDatabase(source, () => fail('Error finalizing backup:', finishError));
+                closeDatabase(source, () => validateSnapshot(backupFile, (integrityError) => {
+                    if (integrityError) {
+                        try { fs.unlinkSync(backupFile); } catch (unlinkError) { /* best-effort cleanup of invalid output */ }
+                        return fail('Backup integrity check failed:', integrityError);
+                    }
+                    try {
+                        pruneSnapshots();
+                    } catch (pruneError) {
+                        return fail('Error pruning old backups:', pruneError);
+                    }
+                    const sizeKb = (fs.statSync(backupFile).size / 1024).toFixed(0);
+                    console.log(`Integrity check passed. Backed up database (WAL-safe) to ${backupFile} (${sizeKb} KB)`);
+                }));
+            });
+        };
+        backup.step(-1, step);
+    });
+}

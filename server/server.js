@@ -7,7 +7,7 @@ const jwt = require('jsonwebtoken');
 const { initializeApp: initializeFirebaseAdmin, applicationDefault, cert, getApps: getFirebaseApps } = require('firebase-admin/app');
 const { getAuth: getFirebaseAuth } = require('firebase-admin/auth');
 const db = require('./db');
-const { UPLOAD_DIR } = require('./storage');
+const { UPLOAD_DIR, VOLUME_PATH } = require('./storage');
 const {
     DEFAULT_RECOVERY_CODE_COUNT,
     replaceRecoveryCodes,
@@ -1812,6 +1812,18 @@ app.get('/api/payments/paystack/config', (req, res) => {
     res.json({ enabled: Boolean(PAYSTACK_SECRET_KEY), akua_forwarding: Boolean(PAYSTACK_AKUA_WEBHOOK_URL) });
 });
 
+// Deliberately small: platform health checks need to know that the schema-ready
+// process can still query SQLite, but must never disclose filesystem paths,
+// credentials, record counts, or payment configuration.
+app.get('/api/health', (req, res) => {
+    db.get('SELECT 1 AS ready', [], (error) => {
+        if (error) {
+            return res.status(503).json({ status: 'unavailable', database: 'unavailable', persistentStorage: Boolean(VOLUME_PATH) });
+        }
+        res.json({ status: 'ok', database: 'ready', persistentStorage: Boolean(VOLUME_PATH) });
+    });
+});
+
 app.post('/api/checkout/paystack', optionalCustomer, async (req, res) => {
     res.setHeader('Cache-Control', 'no-store');
     if (!PAYSTACK_SECRET_KEY && typeof app.get('paystackApiRequest') !== 'function') {
@@ -3397,16 +3409,70 @@ app.use((err, req, res, next) => {
 });
 
 const PORT = process.env.PORT || 3001;
+let httpServer = null;
+let shutdownInProgress = false;
+
+function checkpointWal() {
+    return new Promise((resolve, reject) => {
+        db.run('PRAGMA wal_checkpoint(TRUNCATE)', (error) => error ? reject(error) : resolve());
+    });
+}
+
+function closeDatabase() {
+    return new Promise((resolve, reject) => {
+        db.close((error) => error ? reject(error) : resolve());
+    });
+}
+
+function gracefulShutdown(signal) {
+    if (shutdownInProgress) return;
+    shutdownInProgress = true;
+    console.log(`${signal} received; draining HTTP requests before closing SQLite.`);
+    const drainTimeout = setTimeout(() => {
+        console.error('Graceful shutdown timed out after 15 seconds.');
+        process.exit(1);
+    }, 15000);
+
+    const afterDrain = async (serverError) => {
+        try {
+            if (serverError) throw serverError;
+            await checkpointWal();
+            await closeDatabase();
+            clearTimeout(drainTimeout);
+            console.log('SQLite checkpointed and closed cleanly.');
+            process.exit(0);
+        } catch (error) {
+            clearTimeout(drainTimeout);
+            console.error('Graceful shutdown failed:', error);
+            process.exit(1);
+        }
+    };
+    if (httpServer) httpServer.close(afterDrain);
+    else afterDrain();
+}
+
+function startServer() {
+    httpServer = app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+}
+
 // Start listening only after the database schema is ready, so requests can't
 // arrive before the tables exist (which crashed a fresh clone with
 // "no such table: orders"). Falls back to listening directly if whenReady
 // isn't available, for safety.
 if (typeof db.whenReady === 'function') {
     db.whenReady(() => {
-        app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+        startServer();
     });
 } else {
-    app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+    startServer();
+}
+
+// test_smoke.js imports this module and owns its own process lifetime. Signal
+// handling belongs to the executable server process so its test import stays
+// compatible while production still drains cleanly on platform termination.
+if (require.main === module) {
+    process.once('SIGTERM', () => gracefulShutdown('SIGTERM'));
+    process.once('SIGINT', () => gracefulShutdown('SIGINT'));
 }
 
 module.exports = app;

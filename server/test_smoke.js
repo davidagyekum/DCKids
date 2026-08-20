@@ -134,6 +134,16 @@ async function run() {
     const up = await waitForServer(30);
     if (!up) { console.error('FATAL: server did not start'); process.exit(1); }
 
+    const healthResponse = await fetch(`${BASE}/api/health`);
+    const healthBody = await healthResponse.text();
+    let healthPayload = {};
+    try { healthPayload = JSON.parse(healthBody); } catch (error) { /* assertion below reports a missing JSON health route */ }
+    check('health check proves SQLite readiness without exposing configuration',
+        healthResponse.status === 200 && healthPayload.status === 'ok' && healthPayload.database === 'ready' &&
+        typeof healthPayload.persistentStorage === 'boolean' &&
+        Object.keys(healthPayload).sort().join(',') === 'database,persistentStorage,status',
+        healthBody);
+
     // ---- fresh-database boot: seeded from the products.json snapshot ----
     const products = await (await fetch(`${BASE}/api/products`)).json();
     check('fresh DB seeds full catalogue', Array.isArray(products) && products.length >= 200, `got ${products.length}`);
