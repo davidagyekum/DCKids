@@ -3471,8 +3471,8 @@ if (typeof db.whenReady === 'function') {
 // handling belongs to the executable server process so its test import stays
 // compatible while production still drains cleanly on platform termination.
 if (require.main === module) {
-    process.once('SIGTERM', () => gracefulShutdown('SIGTERM'));
-    process.once('SIGINT', () => gracefulShutdown('SIGINT'));
+    process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+    process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 }
 
 module.exports = app;
