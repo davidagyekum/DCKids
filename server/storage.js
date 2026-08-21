@@ -9,7 +9,6 @@ const isRailwayProduction = process.env.NODE_ENV === 'production' && Boolean(
     process.env.RAILWAY_ENVIRONMENT || process.env.RAILWAY_PROJECT_ID || process.env.RAILWAY_SERVICE_ID
 );
 const volumeMountPath = String(process.env.RAILWAY_VOLUME_MOUNT_PATH || '').trim();
-const volumeName = String(process.env.RAILWAY_VOLUME_NAME || '').trim();
 
 function resolveConfiguredPath(value, fallback) {
     return path.resolve(String(value || fallback));
@@ -47,10 +46,6 @@ function resolvePhysicalPath(targetPath) {
 if (isRailwayProduction && !volumeMountPath) {
     throw new Error('RAILWAY_VOLUME_MOUNT_PATH is required for Railway production durable storage.');
 }
-if (isRailwayProduction && !volumeName) {
-    throw new Error('RAILWAY_VOLUME_NAME is required for Railway production durable storage.');
-}
-
 const VOLUME_PATH = isRailwayProduction ? path.resolve(volumeMountPath) : null;
 const DB_PATH = resolveConfiguredPath(
     process.env.DB_PATH,

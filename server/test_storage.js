@@ -73,10 +73,9 @@ try {
     const railway = loadStorage({
         NODE_ENV: 'production',
         RAILWAY_ENVIRONMENT: 'production',
-        RAILWAY_VOLUME_MOUNT_PATH: volume,
-        RAILWAY_VOLUME_NAME: 'dckids-data'
+        RAILWAY_VOLUME_MOUNT_PATH: volume
     });
-    check('derives database uploads and backups beneath the Railway volume', () => {
+    check('derives durable paths from Railway official mount variable alone', () => {
         assert.strictEqual(railway.status, 0, railway.stderr);
         const storage = JSON.parse(railway.stdout);
         assert.strictEqual(storage.DB_PATH, path.join(volume, 'inventory.db'));
@@ -92,16 +91,6 @@ try {
     check('rejects Railway production without the injected volume mount path', () => {
         assert.notStrictEqual(missingVolumePath.status, 0);
         assert.match(missingVolumePath.stderr, /RAILWAY_VOLUME_MOUNT_PATH/i);
-    });
-
-    const missingVolumeName = loadStorage({
-        NODE_ENV: 'production',
-        RAILWAY_ENVIRONMENT: 'production',
-        RAILWAY_VOLUME_MOUNT_PATH: volume
-    });
-    check('rejects Railway production without the injected volume name', () => {
-        assert.notStrictEqual(missingVolumeName.status, 0);
-        assert.match(missingVolumeName.stderr, /RAILWAY_VOLUME_NAME/i);
     });
 
     [
