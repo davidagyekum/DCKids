@@ -19,8 +19,8 @@ function check(name, fn) {
     }
 }
 
-check('Railway launches server.js with Node directly', () => {
-    assert.strictEqual(railway.deploy.startCommand, 'node server/server.js');
+check('Railway launches the storage-aware Node bootstrap directly', () => {
+    assert.strictEqual(railway.deploy.startCommand, 'node server/start_server.js');
 });
 
 check('Railway reserves a string-valued 15-second drain window', () => {
@@ -28,14 +28,14 @@ check('Railway reserves a string-valued 15-second drain window', () => {
     assert.strictEqual(railway.deploy.drainingSeconds, '15');
 });
 
-check('Railway restores a one-time cutover seed before starting the server', () => {
-    assert.deepStrictEqual(railway.deploy.preDeployCommand, ['node server/restore_seed.js']);
+check('Railway does not attempt volume restoration during pre-deploy', () => {
+    assert.strictEqual(railway.deploy.preDeployCommand, undefined);
 });
 
-check('the runtime container launches server.js with Node directly', () => {
+check('the runtime container launches the storage-aware Node bootstrap directly', () => {
     const command = dockerfile.match(/^CMD\s+(\[[^\r\n]+\])\s*$/m);
     assert.ok(command, 'Dockerfile must contain a JSON-array CMD');
-    assert.deepStrictEqual(JSON.parse(command[1]), ['node', 'server/server.js']);
+    assert.deepStrictEqual(JSON.parse(command[1]), ['node', 'server/start_server.js']);
 });
 
 console.log(`\n${passed} passed, 0 failed`);

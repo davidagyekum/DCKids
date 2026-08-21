@@ -109,7 +109,33 @@ async function main() {
         fs.rmSync(cliRoot, { recursive: true, force: true });
     }
 
-    console.log('3 passed, 0 failed');
+    const startupRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'dckids-startup-seed-'));
+    const startupDbPath = path.join(startupRoot, 'inventory.db');
+    const startupSeedPath = path.join(startupRoot, 'cutover-seed.db');
+    try {
+        await createDatabase(startupDbPath, 'Current database');
+        await createDatabase(startupSeedPath, 'Restored before startup');
+        const run = spawnSync(process.execPath, [path.join(__dirname, 'start_server.js')], {
+            encoding: 'utf8',
+            env: Object.assign({}, process.env, {
+                NODE_ENV: 'production',
+                RAILWAY_ENVIRONMENT: 'production',
+                RAILWAY_VOLUME_MOUNT_PATH: startupRoot,
+                DB_PATH: startupDbPath,
+                UPLOAD_DIR: path.join(startupRoot, 'uploads'),
+                BACKUP_DIR: path.join(startupRoot, 'backups'),
+                JWT_SECRET: ''
+            })
+        });
+        assert.notStrictEqual(run.status, 0, 'server must still enforce its production secret checks');
+        assert.match(run.stderr, /JWT_SECRET/);
+        assert.strictEqual(await readProductName(startupDbPath), 'Restored before startup');
+        assert.ok(!fs.existsSync(startupSeedPath), 'startup must consume the seed before opening the app database');
+    } finally {
+        fs.rmSync(startupRoot, { recursive: true, force: true });
+    }
+
+    console.log('4 passed, 0 failed');
 }
 
 main().catch((error) => {

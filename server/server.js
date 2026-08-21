@@ -3476,7 +3476,7 @@ if (typeof db.whenReady === 'function') {
 // test_smoke.js imports this module and owns its own process lifetime. Signal
 // handling belongs to the executable server process so its test import stays
 // compatible while production still drains cleanly on platform termination.
-if (require.main === module) {
+if (require.main === module || process.env.DCKIDS_SERVER_ENTRYPOINT === '1') {
     process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
     process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 }

@@ -20,4 +20,4 @@ COPY --from=dependencies /app/server/node_modules ./server/node_modules
 COPY . .
 
 EXPOSE 8080
-CMD ["node", "server/server.js"]
+CMD ["node", "server/start_server.js"]
