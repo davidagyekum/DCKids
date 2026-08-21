@@ -23,9 +23,9 @@ check('Railway launches the storage-aware Node bootstrap directly', () => {
     assert.strictEqual(railway.deploy.startCommand, 'node server/start_server.js');
 });
 
-check('Railway reserves a string-valued 15-second drain window', () => {
-    assert.strictEqual(typeof railway.deploy.drainingSeconds, 'string');
-    assert.strictEqual(railway.deploy.drainingSeconds, '15');
+check('Railway reserves a numeric 15-second drain window', () => {
+    assert.strictEqual(typeof railway.deploy.drainingSeconds, 'number');
+    assert.strictEqual(railway.deploy.drainingSeconds, 15);
 });
 
 check('Railway does not attempt volume restoration during pre-deploy', () => {
