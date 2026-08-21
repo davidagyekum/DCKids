@@ -28,6 +28,10 @@ check('Railway reserves a string-valued 15-second drain window', () => {
     assert.strictEqual(railway.deploy.drainingSeconds, '15');
 });
 
+check('Railway restores a one-time cutover seed before starting the server', () => {
+    assert.deepStrictEqual(railway.deploy.preDeployCommand, ['node server/restore_seed.js']);
+});
+
 check('the runtime container launches server.js with Node directly', () => {
     const command = dockerfile.match(/^CMD\s+(\[[^\r\n]+\])\s*$/m);
     assert.ok(command, 'Dockerfile must contain a JSON-array CMD');

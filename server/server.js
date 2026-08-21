@@ -8,6 +8,7 @@ const { initializeApp: initializeFirebaseAdmin, applicationDefault, cert, getApp
 const { getAuth: getFirebaseAuth } = require('firebase-admin/auth');
 const db = require('./db');
 const { UPLOAD_DIR, VOLUME_PATH } = require('./storage');
+const { createMaintenanceMiddleware } = require('./maintenance');
 const {
     DEFAULT_RECOVERY_CODE_COUNT,
     replaceRecoveryCodes,
@@ -72,6 +73,11 @@ app.use(express.json({
     }
 }));
 app.use(express.urlencoded({ limit: '8mb', extended: true }));
+
+// Railway cannot pause public ingress without replacing the running container.
+// During a storage cutover, keep reads available while every state-changing
+// request returns a retriable 503. Paystack will safely retry its webhook.
+app.use(createMaintenanceMiddleware());
 
 // Authenticated and customer-account responses contain private data and must
 // never be retained by browsers, CDNs, or the service worker.
